@@ -14,6 +14,7 @@ if (!defined('ABSPATH')) exit;
 define('NEXIS_AI_VERSION', '1.0.1');
 define('NEXIS_AI_GITHUB_REPO', 'NazemiSh/nexis-ai-engine');
 define('NEXIS_AI_SECRET_SALT', 'NEXIS_CORE_SECURE_SALT_99812_xK9#');
+define('NEXIS_AI_GITHUB_TOKEN', '');
 
 register_activation_hook(__FILE__, 'nexis_ai_create_db_tables');
 
@@ -67,9 +68,17 @@ add_action('plugins_loaded', function() {
 // ==========================================
 function nexis_ai_check_github_update() {
     $url = 'https://api.github.com/repos/' . NEXIS_AI_GITHUB_REPO . '/releases/latest';
+    $headers = [
+        'User-Agent' => 'Nexis-AI-Engine-Updater/' . NEXIS_AI_VERSION,
+        'Accept'     => 'application/vnd.github.v3+json'
+    ];
+    if (defined('NEXIS_AI_GITHUB_TOKEN') && !empty(NEXIS_AI_GITHUB_TOKEN)) {
+        $headers['Authorization'] = 'Bearer ' . NEXIS_AI_GITHUB_TOKEN;
+    }
+
     $response = wp_remote_get($url, [
-        'headers' => ['User-Agent' => 'Nexis-AI-Engine-Updater/' . NEXIS_AI_VERSION],
-        'timeout' => 12
+        'headers' => $headers,
+        'timeout' => 15
     ]);
 
     if (is_wp_error($response) || wp_remote_retrieve_response_code($response) !== 200) {
@@ -109,6 +118,15 @@ add_filter('site_transient_update_plugins', function($transient) {
     return $transient;
 });
 
+add_filter('http_request_args', function($args, $url) {
+    if (strpos($url, 'api.github.com/repos/' . NEXIS_AI_GITHUB_REPO) !== false || strpos($url, 'codeload.github.com/' . NEXIS_AI_GITHUB_REPO) !== false) {
+        if (defined('NEXIS_AI_GITHUB_TOKEN') && !empty(NEXIS_AI_GITHUB_TOKEN)) {
+            $args['headers']['Authorization'] = 'Bearer ' . NEXIS_AI_GITHUB_TOKEN;
+        }
+    }
+    return $args;
+}, 10, 2);
+
 add_action('wp_ajax_nexis_ai_check_update_now', function() {
     check_ajax_referer('nexis_ai_admin_nonce', 'nonce');
     if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'دسترسی غیرمجاز']);
@@ -143,18 +161,18 @@ add_action('wp_ajax_nexis_ai_check_update_now', function() {
 function nexis_ai_validate_license($license_key) {
     if (empty($license_key)) return ['valid' => false, 'message' => 'کلید لایسنس وارد نشده است.'];
     $parts = explode('.', trim($license_key));
-    if (count($parts) !== 2) return ['valid' => false, 'message' => 'ساختار فرمت کلید نامعتبر است.'];
+    if (count($parts) !== 2) return ['valid' => false, 'message' => 'ساختار فرمت کلید نامعتبر است (باید دو بخشی با نقطه باشد).'];
 
     list($payload_b64, $signature) = $parts;
     $expected_sig = hash_hmac('sha256', $payload_b64, NEXIS_AI_SECRET_SALT);
-    if (!hash_equals($expected_sig, $signature)) return ['valid' => false, 'message' => 'امضای امنیتی کلید نامعتبر است.'];
+    if (!hash_equals($expected_sig, $signature)) return ['valid' => false, 'message' => 'امضای امنیتی کلید نامعتبر است (Secret Salt تطابق ندارد).'];
 
     $data = json_decode(base64_decode($payload_b64), true);
-    if (!$data || !isset($data['domain']) || !isset($data['exp'])) return ['valid' => false, 'message' => 'داده‌های لایسنس نامعتبر است.'];
+    if (!$data || !isset($data['domain']) || !isset($data['exp'])) return ['valid' => false, 'message' => 'داده‌های رمزشده لایسنس خوانا نیستند.'];
 
     $site_host = parse_url(home_url(), PHP_URL_HOST);
     if ($data['domain'] !== '*' && $data['domain'] !== $site_host) {
-        return ['valid' => false, 'message' => "این لایسنس مخصوص دامنه {$data['domain']} صادر شده است."];
+        return ['valid' => false, 'message' => "این لایسنس برای دامنه {$data['domain']} صادر شده و روی دامنه {$site_host} معتبر نیست."];
     }
 
     $is_lifetime = (intval($data['exp']) === 0);
@@ -183,7 +201,14 @@ function nexis_ai_get_license_status() {
             if ($val['max_requests'] > 0 && $requests_count >= $val['max_requests']) {
                 return ['allowed' => false, 'status' => 'quota_exceeded', 'message' => 'سقف تعداد درخواست‌های لایسنس به پایان رسیده است.', 'details' => $val, 'count' => $requests_count];
             }
-            return ['allowed' => true, 'status' => 'active', 'message' => 'لایسنس فعال و معتبر', 'details' => $val, 'count' => $requests_count];
+            return ['allowed' => true, 'status' => 'active', 'message' => 'لایسنس فعال و معتبر (' . $val['expires_at'] . ')', 'details' => $val, 'count' => $requests_count];
+        } else {
+            return [
+                'allowed' => false,
+                'status'  => 'invalid',
+                'message' => 'کلید لایسنس نامعتبر است: ' . $val['message'],
+                'count'   => $requests_count
+            ];
         }
     }
 
@@ -202,7 +227,7 @@ function nexis_ai_get_license_status() {
     return [
         'allowed' => false,
         'status'  => 'expired',
-        'message' => 'مهلت نسخه آزمایشی تمام شده است. لطفاً جهت ادامه لایسنس تجاری را وارد فرمایید.',
+        'message' => 'مهلت نسخه آزمایشی تمام شده است. لطفاً لایسنس تجاری را وارد فرمایید.',
         'count'   => $requests_count
     ];
 }
@@ -693,7 +718,55 @@ add_action('wp_ajax_nexis_ai_generate_seo', function() {
     wp_send_json_success(['parsed' => true, 'data' => $parsed]);
 });
 
-// ویجت فرانت‌اند با تبدیل خودکار انواع لینک‌ها به دکمه
+// خروجی CSV برای تاریخچه مکالمات
+add_action('admin_init', function() {
+    if (isset($_GET['page']) && $_GET['page'] === 'nexis-ai-logs' && isset($_GET['action']) && $_GET['action'] === 'export_csv') {
+        if (!current_user_can('manage_options')) wp_die('دسترسی غیرمجاز');
+
+        global $wpdb;
+        $table_logs = $wpdb->prefix . 'nexis_ai_logs';
+
+        $where = ['1=1'];
+        $params = [];
+
+        if (!empty($_GET['start_date'])) {
+            $where[] = "created_at >= %s";
+            $params[] = sanitize_text_field($_GET['start_date']) . ' 00:00:00';
+        }
+        if (!empty($_GET['end_date'])) {
+            $where[] = "created_at <= %s";
+            $params[] = sanitize_text_field($_GET['end_date']) . ' 23:59:59';
+        }
+
+        $where_sql = implode(' AND ', $where);
+        $sql = "SELECT id, user_ip, user_query, ai_response, model_used, status, created_at FROM $table_logs WHERE $where_sql ORDER BY id DESC";
+
+        $logs = !empty($params) ? $wpdb->get_results($wpdb->prepare($sql, $params), ARRAY_A) : $wpdb->get_results($sql, ARRAY_A);
+
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename=nexis-ai-logs-' . date('Y-m-d') . '.csv');
+        $out = fopen('php://output', 'w');
+        // اضافه کردن BOM برای پشتیبانی زبان فارسی در اکسل
+        fprintf($out, chr(0xEF).chr(0xBB).chr(0xBF));
+        fputcsv($out, ['ردیف', 'آی‌پی کاربر', 'پرسش کاربر', 'پاسخ هوش مصنوعی', 'مدل مصرفی', 'وضعیت', 'تاریخ و ساعت']);
+
+        foreach ($logs as $row) {
+            fputcsv($out, [
+                $row['id'],
+                $row['user_ip'],
+                $row['user_query'],
+                $row['ai_response'],
+                $row['model_used'],
+                $row['status'],
+                $row['created_at']
+            ]);
+        }
+        fclose($out);
+        exit;
+    }
+});
+
+// ویجت فرانت‌اند
 add_action('wp_footer', function () {
     $settings = get_option('nexis_ai_settings', []);
     if (empty($settings['enable_widget']) || $settings['enable_widget'] !== '1') return;
@@ -786,7 +859,6 @@ add_action('wp_footer', function () {
         function getHistory() { try { return JSON.parse(localStorage.getItem('nexis_chat_history') || '[]'); } catch(e) { return []; } }
         function saveHistory(list) { localStorage.setItem('nexis_chat_history', JSON.stringify(list)); }
 
-        // تبدیل هوشمند انواع لینک‌ها (مارک‌داون یا آدرس مستقیم) به دکمه زیبا
         function parseMarkdown(text) {
             var html = text;
             html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g, '<a href="$2" target="_blank" class="nexis-chat-link">🔗 $1</a>');
@@ -1073,7 +1145,6 @@ function nexis_ai_render_settings_page() {
             </div>
         </div>
 
-        <!-- باکس راهنمای متنی به صورت ستاره‌دار برای لوکال و کلود -->
         <div class="shn-guide-box">
             <div style="font-weight: bold; margin-bottom: 8px; color: #0073aa; font-size: 13.5px;">💡 راهنمای جامع انتخاب و بهینه‌سازی مدل‌ها:</div>
             
@@ -1092,7 +1163,6 @@ function nexis_ai_render_settings_page() {
             </div>
         </div>
 
-        <!-- کارت پایگاه دانش و خزش اطلاعات سایت -->
         <div style="background: #fff; padding: 16px 22px; border: 1px solid #ccd0d4; border-radius: 8px; margin-bottom: 22px; display: flex; justify-content: space-between; align-items: center;">
             <div>
                 <h3 style="margin-top: 0; margin-bottom: 6px; color: #0073aa;">پایگاه دانش محلی (Nexis Knowledge Base)</h3>
@@ -1143,7 +1213,6 @@ function nexis_ai_render_settings_page() {
                 </div>
             </div>
 
-            <!-- تب‌های اندپوینت‌ها -->
             <div class="nexis-card">
                 <div class="nexis-tabs-bar" id="nexis-tabs-container">
                     <?php 
@@ -1214,7 +1283,7 @@ function nexis_ai_render_settings_page() {
                             <div class="models-table-box-<?php echo esc_attr($env_id); ?>" style="<?php echo empty($cached_models) ? 'display:none;' : ''; ?> max-height: 250px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 6px;">
                                 <table class="nexis-models-table">
                                     <thead>
-                                        <tr><th style="width: 120px;">نوع</th><th>نام مدل</th><th>شناسه سیستمی (کلیک کنید تا به عنوان مدل انتخاب شود)</th></tr>
+                                        <tr><th style="width: 120px;">نوع</th><th>نام مدل</th><th>شناسه سیستمی</th></tr>
                                     </thead>
                                     <tbody id="tbody-<?php echo esc_attr($env_id); ?>">
                                         <?php if (!empty($cached_models)): foreach ($cached_models as $m): ?>
@@ -1235,7 +1304,6 @@ function nexis_ai_render_settings_page() {
                 </div>
             </div>
 
-            <!-- پارامترهای پردازشی LLM -->
             <div class="nexis-card">
                 <h3 style="margin-top: 0; color: #0073aa; border-bottom: 1px solid #eee; padding-bottom: 10px;">پارامترهای پردازشی (Context & Generation)</h3>
                 <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap;">
@@ -1268,7 +1336,6 @@ function nexis_ai_render_settings_page() {
                 </div>
             </div>
 
-            <!-- شخصی‌سازی ویجت -->
             <div class="nexis-card">
                 <h3 style="margin-top: 0; color: #0073aa; border-bottom: 1px solid #eee; padding-bottom: 10px;">شخصی‌سازی ظاهر ویجت فرانت‌اند</h3>
                 <table class="form-table">
@@ -1753,7 +1820,6 @@ function nexis_ai_render_geo_page() {
             </tbody>
         </table>
 
-        <!-- مودال خروجی سئو -->
         <div id="nexis-seo-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.65); z-index: 999999; justify-content: center; align-items: center;">
             <div style="background: #fff; width: 700px; max-width: 90vw; max-height: 85vh; border-radius: 12px; overflow-y: auto; padding: 25px; position: relative;">
                 <span id="nexis-close-modal" style="position: absolute; top: 15px; left: 20px; font-size: 22px; cursor: pointer; color: #888;">✕</span>
@@ -1832,62 +1898,226 @@ function nexis_ai_render_geo_page() {
     <?php
 }
 
+// مدیریت لایسنس (همراه با قابلیت حذف و ماسک پسورد)
 function nexis_ai_render_license_page() {
+    $settings = get_option('nexis_ai_settings', []);
+
     if (isset($_POST['nexis_save_license']) && check_admin_referer('nexis_license_nonce')) {
-        $settings = get_option('nexis_ai_settings', []);
-        $settings['license_key'] = sanitize_text_field($_POST['license_key']);
+        $settings['license_key'] = sanitize_text_field(trim($_POST['license_key']));
         update_option('nexis_ai_settings', $settings);
         echo '<div class="updated notice is-dismissible"><p>اطلاعات لایسنس بررسی و ذخیره شد.</p></div>';
     }
 
-    $settings = get_option('nexis_ai_settings', []);
+    if (isset($_POST['nexis_delete_license']) && check_admin_referer('nexis_license_nonce')) {
+        $settings['license_key'] = '';
+        update_option('nexis_ai_settings', $settings);
+        echo '<div class="notice notice-warning is-dismissible"><p>لایسنس حذف گردید و سیستم به حالت آزمایشی بازگشت.</p></div>';
+    }
+
     $lic = nexis_ai_get_license_status();
     $site_host = parse_url(home_url(), PHP_URL_HOST);
+    $current_key = !empty($settings['license_key']) ? $settings['license_key'] : '';
+
+    $status_color = ($lic['status'] === 'active') ? '#166534' : (($lic['status'] === 'trial') ? '#0284c7' : '#dc2626');
+    $status_bg    = ($lic['status'] === 'active') ? '#f0fdf4' : (($lic['status'] === 'trial') ? '#f0f9ff' : '#fef2f2');
     ?>
     <div class="wrap" style="direction: rtl; text-align: right; max-width: 850px;">
         <h1 style="margin-bottom: 20px;">مدیریت لایسنس تجاری نکسیس (Nexis License)</h1>
-        <div style="background: #fff; border: 1px solid #ccd0d4; border-radius: 10px; padding: 25px; margin-bottom: 25px;">
-            <h3>دامنه فعال: <code><?php echo esc_html($site_host); ?></code></h3>
-            <p>وضعیت لایسنس: <strong><?php echo esc_html($lic['message']); ?></strong></p>
-            <p>تعداد ریکوئست مصرف‌شده: <strong><?php echo intval($lic['count']); ?></strong></p>
+        
+        <div style="background: #fff; border: 1px solid #ccd0d4; border-radius: 10px; padding: 25px; margin-bottom: 25px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 18px;">
+                <h3 style="margin: 0;">دامنه فعال این سامانه: <code style="font-size: 15px;"><?php echo esc_html($site_host); ?></code></h3>
+                <span style="background: <?php echo $status_bg; ?>; color: <?php echo $status_color; ?>; padding: 4px 12px; border-radius: 6px; font-weight: bold; font-size: 13px;">
+                    <?php echo esc_html($lic['message']); ?>
+                </span>
+            </div>
+
+            <p style="font-size: 13.5px; color: #555;">
+                تعداد ریکوئست‌های مصرف‌شده تا این لحظه: <strong style="font-size: 16px; color: #0073aa;"><?php echo intval($lic['count']); ?></strong> بار
+            </p>
+
             <form method="post" action="">
                 <?php wp_nonce_field('nexis_license_nonce'); ?>
                 <table class="form-table">
                     <tr>
-                        <th>کلید لایسنس:</th>
-                        <td><input type="text" name="license_key" value="<?php echo esc_attr(!empty($settings['license_key']) ? $settings['license_key'] : ''); ?>" class="large-text" style="direction: ltr; font-family: monospace;"></td>
+                        <th style="width: 140px;"><label for="nexis_license_input">کلید لایسنس:</label></th>
+                        <td>
+                            <div style="position: relative; max-width: 550px;">
+                                <input type="password" id="nexis_license_input" name="license_key" value="<?php echo esc_attr($current_key); ?>" class="large-text" style="direction: ltr; font-family: monospace; padding-left: 35px;" placeholder="کلید فعال‌سازی نکسیس...">
+                                <span id="toggle_license_view" title="نمایش/مخفی کردن کلید" style="position: absolute; left: 10px; top: 8px; cursor: pointer; font-size: 16px; user-select: none;">👁️</span>
+                            </div>
+                            <small style="color: #64748b; display: block; margin-top: 5px;">کلید لایسنس به صورت محرمانه رمزنگاری می‌شود.</small>
+                        </td>
                     </tr>
                 </table>
-                <p class="submit">
+
+                <div style="margin-top: 20px; display: flex; gap: 10px; align-items: center;">
                     <input type="submit" name="nexis_save_license" class="button button-primary button-hero" value="ثبت و اعتبارسنجی لایسنس">
-                </p>
+                    <?php if (!empty($current_key)): ?>
+                        <input type="submit" name="nexis_delete_license" class="button button-link-delete" value="حذف لایسنس و بازگشت به حالت رایگان" onclick="return confirm('آیا مایلید لایسنس فعلی از سیستم پاک شود؟');" style="color: #dc2626; margin-right: 15px;">
+                    <?php endif; ?>
+                </div>
             </form>
         </div>
     </div>
+
+    <script>
+    jQuery(document).ready(function($) {
+        $('#toggle_license_view').on('click', function() {
+            var inp = $('#nexis_license_input');
+            if (inp.attr('type') === 'password') {
+                inp.attr('type', 'text');
+                $(this).text('🔒');
+            } else {
+                inp.attr('type', 'password');
+                $(this).text('👁️');
+            }
+        });
+    });
+    </script>
     <?php
 }
 
+// تاریخچه مکالمات (بهینه‌سازی شده با فیلتر تاریخ، خروجی CSV، آکاردئون و صفحه‌بندی)
 function nexis_ai_render_logs_page() {
     global $wpdb;
     $table_logs = $wpdb->prefix . 'nexis_ai_logs';
-    $logs = $wpdb->get_results("SELECT * FROM $table_logs ORDER BY id DESC LIMIT 50", ARRAY_A);
+
+    $start_date = isset($_GET['start_date']) ? sanitize_text_field($_GET['start_date']) : '';
+    $end_date   = isset($_GET['end_date']) ? sanitize_text_field($_GET['end_date']) : '';
+
+    $where = ['1=1'];
+    $params = [];
+
+    if (!empty($start_date)) {
+        $where[] = "created_at >= %s";
+        $params[] = $start_date . ' 00:00:00';
+    }
+    if (!empty($end_date)) {
+        $where[] = "created_at <= %s";
+        $params[] = $end_date . ' 23:59:59';
+    }
+
+    $where_sql = implode(' AND ', $where);
+
+    // شمارش کل برای صفحه‌بندی
+    $count_sql = "SELECT COUNT(*) FROM $table_logs WHERE $where_sql";
+    $total_items = !empty($params) ? $wpdb->get_var($wpdb->prepare($count_sql, $params)) : $wpdb->get_var($count_sql);
+
+    $per_page = 20;
+    $paged = isset($_GET['paged']) ? max(1, intval($_GET['paged'])) : 1;
+    $offset = ($paged - 1) * $per_page;
+    $total_pages = ceil($total_items / $per_page);
+
+    $data_sql = "SELECT * FROM $table_logs WHERE $where_sql ORDER BY id DESC LIMIT %d OFFSET %d";
+    $query_params = array_merge($params, [$per_page, $offset]);
+    $logs = $wpdb->get_results($wpdb->prepare($data_sql, $query_params), ARRAY_A);
+
+    $export_url = add_query_arg(['action' => 'export_csv', 'start_date' => $start_date, 'end_date' => $end_date]);
     ?>
-    <div class="wrap" style="direction: rtl; text-align: right; max-width: 1050px;">
-        <h1>تاریخچه مکالمات نکسیس</h1>
-        <table class="wp-list-table widefat fixed striped">
-            <thead><tr><th>ردیف</th><th>پرسش</th><th>پاسخ</th><th>مدل</th><th>زمان</th></tr></thead>
+    <style>
+        .nexis-log-accordion { cursor: pointer; color: #0073aa; font-weight: 500; }
+        .nexis-log-content { display: none; background: #f8fafc; padding: 10px 14px; border-radius: 6px; border: 1px solid #e2e8f0; margin-top: 6px; font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; }
+        .nexis-filter-bar { background: #fff; padding: 14px 18px; border: 1px solid #ccd0d4; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 15px; align-items: center; flex-wrap: wrap; }
+    </style>
+
+    <div class="wrap" style="direction: rtl; text-align: right; max-width: 1200px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h1 style="margin: 0;">تاریخچه مکالمات هوش مصنوعی نکسیس</h1>
+            <a href="<?php echo esc_url($export_url); ?>" class="button button-primary" style="background: #166534; border-color: #166534; font-weight: bold;">📥 خروجی اکسل/CSV تاریخچه</a>
+        </div>
+
+        <!-- فیلتر محدوده تاریخ -->
+        <form method="get" action="" class="nexis-filter-bar">
+            <input type="hidden" name="page" value="nexis-ai-logs">
+            <div>
+                <label>از تاریخ:</label>
+                <input type="date" name="start_date" value="<?php echo esc_attr($start_date); ?>">
+            </div>
+            <div>
+                <label>تا تاریخ:</label>
+                <input type="date" name="end_date" value="<?php echo esc_attr($end_date); ?>">
+            </div>
+            <input type="submit" class="button button-secondary" value="اعمال فیلتر">
+            <?php if (!empty($start_date) || !empty($end_date)): ?>
+                <a href="<?php echo admin_url('admin.php?page=nexis-ai-logs'); ?>" class="button button-link-delete" style="color: #dc2626;">پاک کردن فیلتر</a>
+            <?php endif; ?>
+            <span style="margin-right: auto; color: #555;">مجموع رکوردهای یافت‌شده: <strong><?php echo intval($total_items); ?></strong> مورد</span>
+        </form>
+
+        <table class="wp-list-table widefat fixed striped" style="border-radius: 8px; overflow: hidden;">
+            <thead>
+                <tr>
+                    <th style="width: 70px;">ردیف</th>
+                    <th style="width: 28%;">پرسش کاربر</th>
+                    <th style="width: 44%;">پاسخ هوش مصنوعی (کلیک برای باز/جمع شدن)</th>
+                    <th style="width: 13%;">مدل</th>
+                    <th style="width: 15%;">زمان</th>
+                </tr>
+            </thead>
             <tbody>
-                <?php foreach ($logs as $l): ?>
-                    <tr>
-                        <td><?php echo esc_html($l['id']); ?></td>
-                        <td><strong><?php echo esc_html($l['user_query']); ?></strong></td>
-                        <td><?php echo nl2br(esc_html($l['ai_response'])); ?></td>
-                        <td><code><?php echo esc_html($l['model_used']); ?></code></td>
-                        <td><small><?php echo esc_html($l['created_at']); ?></small></td>
-                    </tr>
-                <?php endforeach; ?>
+                <?php if (empty($logs)): ?>
+                    <tr><td colspan="5" style="text-align: center; padding: 25px;">هیچ مکالمه‌ای یافت نشد.</td></tr>
+                <?php else: ?>
+                    <?php foreach ($logs as $l): 
+                        $preview = mb_substr(strip_tags($l['ai_response']), 0, 85, 'UTF-8');
+                        if (mb_strlen(strip_tags($l['ai_response']), 'UTF-8') > 85) $preview .= '...';
+                    ?>
+                        <tr>
+                            <td><?php echo esc_html($l['id']); ?></td>
+                            <td><strong><?php echo esc_html($l['user_query']); ?></strong></td>
+                            <td>
+                                <div class="nexis-log-row">
+                                    <div class="nexis-log-accordion">
+                                        <span>▶ <?php echo esc_html($preview); ?></span>
+                                    </div>
+                                    <div class="nexis-log-content">
+                                        <?php echo esc_html($l['ai_response']); ?>
+                                    </div>
+                                </div>
+                            </td>
+                            <td><code><?php echo esc_html($l['model_used']); ?></code></td>
+                            <td><small style="direction: ltr; display: block;"><?php echo esc_html($l['created_at']); ?></small></td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
             </tbody>
         </table>
+
+        <!-- صفحه‌بندی -->
+        <?php if ($total_pages > 1): ?>
+            <div class="tablenav" style="margin-top: 15px;">
+                <div class="tablenav-pages">
+                    <span class="pagination-links">
+                        <?php
+                        echo paginate_links([
+                            'base'      => add_query_arg('paged', '%#%'),
+                            'format'    => '',
+                            'prev_text' => '&laquo; قبلی',
+                            'next_text' => 'بعدی &raquo;',
+                            'total'     => $total_pages,
+                            'current'   => $paged
+                        ]);
+                        ?>
+                    </span>
+                </div>
+            </div>
+        <?php endif; ?>
     </div>
+
+    <script>
+    jQuery(document).ready(function($) {
+        $('.nexis-log-accordion').on('click', function() {
+            var content = $(this).next('.nexis-log-content');
+            var span = $(this).find('span');
+            content.slideToggle(180);
+            if (span.text().startsWith('▶')) {
+                span.text(span.text().replace('▶', '▼'));
+            } else {
+                span.text(span.text().replace('▼', '▶'));
+            }
+        });
+    });
+    </script>
     <?php
 }
