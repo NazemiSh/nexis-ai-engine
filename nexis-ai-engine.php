@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) exit;
 define('NEXIS_AI_VERSION', '1.0.1');
 define('NEXIS_AI_GITHUB_REPO', 'NazemiSh/nexis-ai-engine');
 define('NEXIS_AI_SECRET_SALT', 'NEXIS_CORE_SECURE_SALT_99812_xK9#');
-define('NEXIS_AI_GITHUB_TOKEN', '');
+define('NEXIS_AI_GITHUB_TOKEN', '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');
 
 register_activation_hook(__FILE__, 'nexis_ai_create_db_tables');
 
