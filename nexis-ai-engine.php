@@ -3,7 +3,7 @@
  * Plugin Name: Nexis AI Engine
  * Plugin URI: https://github.com/NazemiSh/nexis-ai-engine
  * Description: پلتفرم تجاری هوش مصنوعی و بهینه‌ساز سئو معنایی (GEO) وردپرس با پایگاه دانش RAG، پشتیبانی چندمحیطه، مدل‌های آفلاین/ابری، بررسی خودکار آپدیت از گیت‌هاب و مدیریت لایسنس
- * Version: 1.0.1
+ * Version: 1.0.2
  * Author: Nexis AI Core
  * Author URI: https://github.com/NazemiSh
  * Text Domain: nexis-ai-engine
@@ -11,7 +11,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('NEXIS_AI_VERSION', '1.0.1');
+define('NEXIS_AI_VERSION', '1.0.2');
 define('NEXIS_AI_GITHUB_REPO', 'NazemiSh/nexis-ai-engine');
 define('NEXIS_AI_SECRET_SALT', 'NEXIS_CORE_SECURE_SALT_99812_xK9#');
 define('NEXIS_AI_GITHUB_TOKEN', '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');
@@ -126,6 +126,18 @@ add_filter('http_request_args', function($args, $url) {
     }
     return $args;
 }, 10, 2);
+
+// فیکس قطعی: بازگردانی نام پوشه بعد از آپدیت جهت فعال ماندن افزونه در وردپرس
+add_filter('upgrader_post_install', function($response, $hook_extra, $result) {
+    global $wp_filesystem;
+    if (isset($hook_extra['plugin']) && $hook_extra['plugin'] === plugin_basename(__FILE__)) {
+        $proper_destination = WP_PLUGIN_DIR . '/nexis-ai-engine';
+        $wp_filesystem->move($result['destination'], $proper_destination);
+        $result['destination'] = $proper_destination;
+        activate_plugin(plugin_basename(__FILE__));
+    }
+    return $response;
+}, 10, 3);
 
 add_action('wp_ajax_nexis_ai_check_update_now', function() {
     check_ajax_referer('nexis_ai_admin_nonce', 'nonce');
@@ -746,7 +758,6 @@ add_action('admin_init', function() {
         header('Content-Type: text/csv; charset=utf-8');
         header('Content-Disposition: attachment; filename=nexis-ai-logs-' . date('Y-m-d') . '.csv');
         $out = fopen('php://output', 'w');
-        // اضافه کردن BOM برای پشتیبانی زبان فارسی در اکسل
         fprintf($out, chr(0xEF).chr(0xBB).chr(0xBF));
         fputcsv($out, ['ردیف', 'آی‌پی کاربر', 'پرسش کاربر', 'پاسخ هوش مصنوعی', 'مدل مصرفی', 'وضعیت', 'تاریخ و ساعت']);
 
@@ -776,6 +787,7 @@ add_action('wp_footer', function () {
     $offset_x        = isset($settings['widget_offset_x']) ? intval($settings['widget_offset_x']) : 25;
     $offset_y        = isset($settings['widget_offset_y']) ? intval($settings['widget_offset_y']) : 25;
     $custom_color    = !empty($settings['widget_primary_color']) ? sanitize_hex_color($settings['widget_primary_color']) : '#0073aa';
+    $stop_btn_color  = !empty($settings['widget_stop_color']) ? sanitize_hex_color($settings['widget_stop_color']) : '#dc2626';
     $theme           = !empty($settings['widget_theme']) ? $settings['widget_theme'] : 'theme-blue';
     $launcher_icon   = !empty($settings['widget_launcher_icon']) ? $settings['widget_launcher_icon'] : '💬';
     $header_avatar   = !empty($settings['widget_avatar_icon']) ? $settings['widget_avatar_icon'] : '🤖';
@@ -803,7 +815,7 @@ add_action('wp_footer', function () {
     <style>
         .nexis-chat-link { display: inline-block; background: rgba(0, 115, 170, 0.12); color: #0073aa !important; padding: 4px 10px; margin: 4px 2px; border-radius: 6px; text-decoration: none !important; font-weight: bold; font-size: 12px; border: 1px solid rgba(0, 115, 170, 0.25); transition: all 0.2s; word-break: break-all; }
         .nexis-chat-link:hover { background: #0073aa; color: #fff !important; }
-        .nexis-btn-stop { background: #dc2626 !important; color: #fff !important; }
+        .nexis-btn-stop { background: <?php echo $stop_btn_color; ?> !important; color: #fff !important; }
     </style>
 
     <div id="nexis-chat-root" style="direction: rtl; font-family: Tahoma, Vazirmatn, sans-serif;">
@@ -1088,6 +1100,7 @@ function nexis_ai_render_settings_page() {
         $settings['widget_offset_y']      = intval($_POST['widget_offset_y']);
         $settings['widget_theme']         = sanitize_text_field($_POST['widget_theme']);
         $settings['widget_primary_color'] = sanitize_hex_color($_POST['widget_primary_color']);
+        $settings['widget_stop_color']    = sanitize_hex_color($_POST['widget_stop_color']);
         $settings['widget_launcher_icon'] = sanitize_text_field($_POST['widget_launcher_icon']);
         $settings['widget_avatar_icon']   = sanitize_text_field($_POST['widget_avatar_icon']);
         $settings['widget_logo_url']      = esc_url_raw($_POST['widget_logo_url']);
@@ -1336,6 +1349,7 @@ function nexis_ai_render_settings_page() {
                 </div>
             </div>
 
+            <!-- شخصی‌سازی ظاهر ویجت فرانت‌اند همراه با رنگ دکمه توقف -->
             <div class="nexis-card">
                 <h3 style="margin-top: 0; color: #0073aa; border-bottom: 1px solid #eee; padding-bottom: 10px;">شخصی‌سازی ظاهر ویجت فرانت‌اند</h3>
                 <table class="form-table">
@@ -1384,8 +1398,12 @@ function nexis_ai_render_settings_page() {
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row"><label for="widget_primary_color">رنگ برند</label></th>
+                        <th scope="row"><label for="widget_primary_color">رنگ تم اصلی (Brand Color)</label></th>
                         <td><input type="color" id="widget_primary_color" name="widget_primary_color" value="<?php echo esc_attr(!empty($settings['widget_primary_color']) ? $settings['widget_primary_color'] : '#0073aa'); ?>" style="width: 45px; height: 35px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;"></td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="widget_stop_color">رنگ دکمه توقف پاسخ (Stop Button Color)</label></th>
+                        <td><input type="color" id="widget_stop_color" name="widget_stop_color" value="<?php echo esc_attr(!empty($settings['widget_stop_color']) ? $settings['widget_stop_color'] : '#dc2626'); ?>" style="width: 45px; height: 35px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer;"></td>
                     </tr>
                     <tr>
                         <th scope="row">موقعیت دکمه چت</th>
@@ -1898,7 +1916,7 @@ function nexis_ai_render_geo_page() {
     <?php
 }
 
-// مدیریت لایسنس (همراه با قابلیت حذف و ماسک پسورد)
+// مدیریت لایسنس
 function nexis_ai_render_license_page() {
     $settings = get_option('nexis_ai_settings', []);
 
@@ -1978,7 +1996,7 @@ function nexis_ai_render_license_page() {
     <?php
 }
 
-// تاریخچه مکالمات (بهینه‌سازی شده با فیلتر تاریخ، خروجی CSV، آکاردئون و صفحه‌بندی)
+// تاریخچه مکالمات
 function nexis_ai_render_logs_page() {
     global $wpdb;
     $table_logs = $wpdb->prefix . 'nexis_ai_logs';
@@ -2000,7 +2018,6 @@ function nexis_ai_render_logs_page() {
 
     $where_sql = implode(' AND ', $where);
 
-    // شمارش کل برای صفحه‌بندی
     $count_sql = "SELECT COUNT(*) FROM $table_logs WHERE $where_sql";
     $total_items = !empty($params) ? $wpdb->get_var($wpdb->prepare($count_sql, $params)) : $wpdb->get_var($count_sql);
 
@@ -2027,7 +2044,6 @@ function nexis_ai_render_logs_page() {
             <a href="<?php echo esc_url($export_url); ?>" class="button button-primary" style="background: #166534; border-color: #166534; font-weight: bold;">📥 خروجی اکسل/CSV تاریخچه</a>
         </div>
 
-        <!-- فیلتر محدوده تاریخ -->
         <form method="get" action="" class="nexis-filter-bar">
             <input type="hidden" name="page" value="nexis-ai-logs">
             <div>
@@ -2084,7 +2100,6 @@ function nexis_ai_render_logs_page() {
             </tbody>
         </table>
 
-        <!-- صفحه‌بندی -->
         <?php if ($total_pages > 1): ?>
             <div class="tablenav" style="margin-top: 15px;">
                 <div class="tablenav-pages">
