@@ -3,7 +3,7 @@
  * Plugin Name: Nexis AI Engine
  * Plugin URI: https://github.com/NazemiSh/nexis-ai-engine
  * Description: پلتفرم تجاری هوش مصنوعی و بهینه‌ساز سئو معنایی (GEO) وردپرس با پایگاه دانش RAG، پشتیبانی چندمحیطه، مدل‌های آفلاین/ابری، بررسی خودکار آپدیت از گیت‌هاب و مدیریت لایسنس
- * Version: 1.0.2
+ * Version: 1.0.3
  * Author: Nexis AI Core
  * Author URI: https://github.com/NazemiSh
  * Text Domain: nexis-ai-engine
@@ -11,10 +11,10 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('NEXIS_AI_VERSION', '1.0.2');
+define('NEXIS_AI_VERSION', '1.0.3');
 define('NEXIS_AI_GITHUB_REPO', 'NazemiSh/nexis-ai-engine');
 define('NEXIS_AI_SECRET_SALT', 'NEXIS_CORE_SECURE_SALT_99812_xK9#');
-define('NEXIS_AI_GITHUB_TOKEN', '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');
+define('NEXIS_AI_GITHUB_TOKEN', '');
 
 register_activation_hook(__FILE__, 'nexis_ai_create_db_tables');
 
@@ -127,7 +127,7 @@ add_filter('http_request_args', function($args, $url) {
     return $args;
 }, 10, 2);
 
-// فیکس قطعی: بازگردانی نام پوشه بعد از آپدیت جهت فعال ماندن افزونه در وردپرس
+// حفظ نام پوشه و فعال نگه‌داشتن افزونه بعد از نصب آپدیت
 add_filter('upgrader_post_install', function($response, $hook_extra, $result) {
     global $wp_filesystem;
     if (isset($hook_extra['plugin']) && $hook_extra['plugin'] === plugin_basename(__FILE__)) {
@@ -168,12 +168,12 @@ add_action('wp_ajax_nexis_ai_check_update_now', function() {
 });
 
 // ==========================================
-// سیستم لایسنس
+// موتور لایسنس و شمارنده‌های تفکیک‌شده
 // ==========================================
 function nexis_ai_validate_license($license_key) {
     if (empty($license_key)) return ['valid' => false, 'message' => 'کلید لایسنس وارد نشده است.'];
     $parts = explode('.', trim($license_key));
-    if (count($parts) !== 2) return ['valid' => false, 'message' => 'ساختار فرمت کلید نامعتبر است (باید دو بخشی با نقطه باشد).'];
+    if (count($parts) !== 2) return ['valid' => false, 'message' => 'ساختار فرمت کلید نامعتبر است.'];
 
     list($payload_b64, $signature) = $parts;
     $expected_sig = hash_hmac('sha256', $payload_b64, NEXIS_AI_SECRET_SALT);
@@ -183,7 +183,7 @@ function nexis_ai_validate_license($license_key) {
     if (!$data || !isset($data['domain']) || !isset($data['exp'])) return ['valid' => false, 'message' => 'داده‌های رمزشده لایسنس خوانا نیستند.'];
 
     $site_host = parse_url(home_url(), PHP_URL_HOST);
-    if ($data['domain'] !== '*' && $data['domain'] !== $site_host) {
+    if ($data['domain'] !== '*' && strtolower($data['domain']) !== strtolower($site_host)) {
         return ['valid' => false, 'message' => "این لایسنس برای دامنه {$data['domain']} صادر شده و روی دامنه {$site_host} معتبر نیست."];
     }
 
@@ -205,43 +205,84 @@ function nexis_ai_validate_license($license_key) {
 function nexis_ai_get_license_status() {
     $settings = get_option('nexis_ai_settings', []);
     $license_key = !empty($settings['license_key']) ? trim($settings['license_key']) : '';
-    $requests_count = intval(get_option('nexis_ai_requests_count', 0));
+    $trial_count = intval(get_option('nexis_ai_trial_requests', 0));
 
     if (!empty($license_key)) {
         $val = nexis_ai_validate_license($license_key);
         if ($val['valid']) {
-            if ($val['max_requests'] > 0 && $requests_count >= $val['max_requests']) {
-                return ['allowed' => false, 'status' => 'quota_exceeded', 'message' => 'سقف تعداد درخواست‌های لایسنس به پایان رسیده است.', 'details' => $val, 'count' => $requests_count];
+            $key_hash = md5($license_key);
+            $lic_count = intval(get_option('nexis_ai_lic_req_' . $key_hash, 0));
+            $max_req = $val['max_requests'];
+
+            if ($max_req > 0 && $lic_count >= $max_req) {
+                return [
+                    'allowed'     => false,
+                    'status'      => 'quota_exceeded',
+                    'message'     => 'سقف مجاز لایسنس (' . number_format($max_req) . ') به پایان رسیده است.',
+                    'details'     => $val,
+                    'lic_count'   => $lic_count,
+                    'trial_count' => $trial_count
+                ];
             }
-            return ['allowed' => true, 'status' => 'active', 'message' => 'لایسنس فعال و معتبر (' . $val['expires_at'] . ')', 'details' => $val, 'count' => $requests_count];
+
+            $req_display = ($max_req > 0) ? (number_format($lic_count) . ' از ' . number_format($max_req)) : (number_format($lic_count) . ' (نامحدود)');
+            return [
+                'allowed'     => true,
+                'status'      => 'active',
+                'message'     => 'لایسنس فعال و معتبر (مصرف: ' . $req_display . ' | انقضا: ' . $val['expires_at'] . ')',
+                'details'     => $val,
+                'lic_count'   => $lic_count,
+                'trial_count' => $trial_count
+            ];
         } else {
             return [
-                'allowed' => false,
-                'status'  => 'invalid',
-                'message' => 'کلید لایسنس نامعتبر است: ' . $val['message'],
-                'count'   => $requests_count
+                'allowed'     => false,
+                'status'      => 'invalid',
+                'message'     => 'کلید لایسنس نامعتبر است: ' . $val['message'],
+                'trial_count' => $trial_count,
+                'lic_count'   => 0
             ];
         }
     }
 
     $trial_limit = 25;
-    if ($requests_count < $trial_limit) {
+    if ($trial_count < $trial_limit) {
         return [
-            'allowed' => true,
-            'status'  => 'trial',
-            'message' => 'نسخه آزمایشی (محدود به ۲۵ ریکوئست رایگان)',
-            'count'   => $requests_count,
-            'limit'   => $trial_limit,
-            'remain'  => ($trial_limit - $requests_count)
+            'allowed'     => true,
+            'status'      => 'trial',
+            'message'     => 'نسخه آزمایشی (مصرف: ' . $trial_count . ' از ' . $trial_limit . ' ریکوئست رایگان)',
+            'trial_count' => $trial_count,
+            'limit'       => $trial_limit,
+            'remain'      => ($trial_limit - $trial_count),
+            'lic_count'   => 0
         ];
     }
 
     return [
-        'allowed' => false,
-        'status'  => 'expired',
-        'message' => 'مهلت نسخه آزمایشی تمام شده است. لطفاً لایسنس تجاری را وارد فرمایید.',
-        'count'   => $requests_count
+        'allowed'     => false,
+        'status'      => 'expired',
+        'message'     => 'مهلت نسخه آزمایشی (۲۵ ریکوئست) تمام شده است. لطفاً لایسنس تجاری را وارد فرمایید.',
+        'trial_count' => $trial_count,
+        'lic_count'   => 0
     ];
+}
+
+function nexis_ai_increment_request_count() {
+    $settings = get_option('nexis_ai_settings', []);
+    $license_key = !empty($settings['license_key']) ? trim($settings['license_key']) : '';
+
+    if (!empty($license_key)) {
+        $val = nexis_ai_validate_license($license_key);
+        if ($val['valid']) {
+            $key_hash = md5($license_key);
+            $c = intval(get_option('nexis_ai_lic_req_' . $key_hash, 0));
+            update_option('nexis_ai_lic_req_' . $key_hash, $c + 1);
+            return;
+        }
+    }
+
+    $t = intval(get_option('nexis_ai_trial_requests', 0));
+    update_option('nexis_ai_trial_requests', $t + 1);
 }
 
 function nexis_ai_clean_content($content) {
@@ -611,8 +652,8 @@ function nexis_ai_call_llm_api($system_prompt, $user_message) {
 
     $body = json_decode(wp_remote_retrieve_body($response), true);
     if (isset($body['choices'][0]['message']['content'])) {
-        $c = intval(get_option('nexis_ai_requests_count', 0));
-        update_option('nexis_ai_requests_count', $c + 1);
+        // افزایش شمارنده تفکیک‌شده
+        nexis_ai_increment_request_count();
         $txt = trim($body['choices'][0]['message']['content']);
         $txt = preg_replace('/<think>.*?<\/think>/is', '', $txt);
         return trim($txt);
@@ -1939,20 +1980,31 @@ function nexis_ai_render_license_page() {
     $status_color = ($lic['status'] === 'active') ? '#166534' : (($lic['status'] === 'trial') ? '#0284c7' : '#dc2626');
     $status_bg    = ($lic['status'] === 'active') ? '#f0fdf4' : (($lic['status'] === 'trial') ? '#f0f9ff' : '#fef2f2');
     ?>
-    <div class="wrap" style="direction: rtl; text-align: right; max-width: 850px;">
+    <div class="wrap" style="direction: rtl; text-align: right; max-width: 900px;">
         <h1 style="margin-bottom: 20px;">مدیریت لایسنس تجاری نکسیس (Nexis License)</h1>
         
         <div style="background: #fff; border: 1px solid #ccd0d4; border-radius: 10px; padding: 25px; margin-bottom: 25px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);">
-            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 12px; margin-bottom: 18px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #eee; padding-bottom: 14px; margin-bottom: 20px;">
                 <h3 style="margin: 0;">دامنه فعال این سامانه: <code style="font-size: 15px;"><?php echo esc_html($site_host); ?></code></h3>
-                <span style="background: <?php echo $status_bg; ?>; color: <?php echo $status_color; ?>; padding: 4px 12px; border-radius: 6px; font-weight: bold; font-size: 13px;">
+                <span style="background: <?php echo $status_bg; ?>; color: <?php echo $status_color; ?>; padding: 6px 14px; border-radius: 6px; font-weight: bold; font-size: 13px;">
                     <?php echo esc_html($lic['message']); ?>
                 </span>
             </div>
 
-            <p style="font-size: 13.5px; color: #555;">
-                تعداد ریکوئست‌های مصرف‌شده تا این لحظه: <strong style="font-size: 16px; color: #0073aa;"><?php echo intval($lic['count']); ?></strong> بار
-            </p>
+            <!-- پنل دوگانه وضعیت شمارنده‌ها -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 22px;">
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 18px;">
+                    <span style="display: block; font-size: 12.5px; color: #64748b; margin-bottom: 4px;">تعداد ریکوئست‌های رایگان (Trial):</span>
+                    <strong style="font-size: 18px; color: #0284c7;"><?php echo intval($lic['trial_count']); ?> / ۲۵</strong>
+                </div>
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 18px;">
+                    <span style="display: block; font-size: 12.5px; color: #64748b; margin-bottom: 4px;">ریکوئست‌های مصرف‌شده این لایسنس:</span>
+                    <?php 
+                    $max_label = (isset($lic['details']['max_requests']) && $lic['details']['max_requests'] > 0) ? number_format($lic['details']['max_requests']) : 'نامحدود';
+                    ?>
+                    <strong style="font-size: 18px; color: #166534;"><?php echo number_format(intval($lic['lic_count'])); ?> / <?php echo $max_label; ?></strong>
+                </div>
+            </div>
 
             <form method="post" action="">
                 <?php wp_nonce_field('nexis_license_nonce'); ?>
@@ -1960,11 +2012,11 @@ function nexis_ai_render_license_page() {
                     <tr>
                         <th style="width: 140px;"><label for="nexis_license_input">کلید لایسنس:</label></th>
                         <td>
-                            <div style="position: relative; max-width: 550px;">
+                            <div style="position: relative; max-width: 600px;">
                                 <input type="password" id="nexis_license_input" name="license_key" value="<?php echo esc_attr($current_key); ?>" class="large-text" style="direction: ltr; font-family: monospace; padding-left: 35px;" placeholder="کلید فعال‌سازی نکسیس...">
                                 <span id="toggle_license_view" title="نمایش/مخفی کردن کلید" style="position: absolute; left: 10px; top: 8px; cursor: pointer; font-size: 16px; user-select: none;">👁️</span>
                             </div>
-                            <small style="color: #64748b; display: block; margin-top: 5px;">کلید لایسنس به صورت محرمانه رمزنگاری می‌شود.</small>
+                            <small style="color: #64748b; display: block; margin-top: 5px;">با ثبت کلید جدید، شمارنده لایسنس به صورت مجزا برای همان کلید محاسبه و صفر خواهد شد.</small>
                         </td>
                     </tr>
                 </table>
