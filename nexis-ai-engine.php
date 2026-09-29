@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Nexis AI Engine
  * Plugin URI: https://github.com/NazemiSh/nexis-ai-engine
- * Description: پلتفرم تجاری هوش مصنوعی و بهینه‌ساز سئو معنایی (GEO) وردپرس با پایگاه دانش RAG، پشتیبانی چندمحیطه، مدل‌های آفلاین/ابری، بررسی خودکار آپدیت از گیت‌هاب و مدیریت لایسنس
- * Version: 1.0.4
+ * Description: پلتفرم تجاری هوش مصنوعی و بهینه‌ساز سئو معنایی (GEO) وردپرس با پایگاه دانش RAG هیبریدی، پشتیبانی چندمحیطه، مدل‌های آفلاین/ابری، بررسی خودکار آپدیت از گیت‌هاب و مدیریت لایسنس
+ * Version: 1.0.5
  * Author: Nexis AI Core
  * Author URI: https://github.com/NazemiSh
  * Text Domain: nexis-ai-engine
@@ -11,7 +11,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('NEXIS_AI_VERSION', '1.0.4');
+define('NEXIS_AI_VERSION', '1.0.5');
 define('NEXIS_AI_GITHUB_REPO', 'NazemiSh/nexis-ai-engine');
 define('NEXIS_AI_SECRET_SALT', 'NEXIS_CORE_SECURE_SALT_99812_xK9#');
 define('NEXIS_AI_GITHUB_TOKEN', '');
@@ -63,9 +63,7 @@ add_action('plugins_loaded', function() {
     }
 });
 
-// ==========================================
-// موتور تبدیل تقویم میلادی به شمسی (Jalali Converter)
-// ==========================================
+// تبدیل تقویم میلادی به جلالی
 function nexis_ai_gregorian_to_jalali($gy, $gm, $gd) {
     $g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
     $jy = ($gy <= 1600) ? 0 : 979;
@@ -106,9 +104,7 @@ function nexis_ai_format_persian_datetime($datetime_str) {
     return sprintf('%04d/%02d/%02d %s', $jy, $jm, $jd, $time_part);
 }
 
-// ==========================================
-// موتور بررسی بروزرسانی مستقیم از گیت‌هاب (GitHub Updater)
-// ==========================================
+// موتور بررسی بروزرسانی گیت‌هاب
 function nexis_ai_check_github_update() {
     $url = 'https://api.github.com/repos/' . NEXIS_AI_GITHUB_REPO . '/releases/latest';
     $headers = [
@@ -170,6 +166,25 @@ add_filter('http_request_args', function($args, $url) {
     return $args;
 }, 10, 2);
 
+// فعال‌سازی قطعی افزونه بعد از نصب بروزرسانی
+add_filter('upgrader_post_install', function($response, $hook_extra, $result) {
+    global $wp_filesystem;
+    if (isset($hook_extra['plugin']) && strpos($hook_extra['plugin'], 'nexis-ai-engine') !== false) {
+        $proper_destination = WP_PLUGIN_DIR . '/nexis-ai-engine';
+        if ($result['destination'] !== $proper_destination) {
+            $wp_filesystem->move($result['destination'], $proper_destination, true);
+            $result['destination'] = $proper_destination;
+        }
+        $plugin_file = 'nexis-ai-engine/nexis-ai-engine.php';
+        $active_plugins = get_option('active_plugins', []);
+        if (!in_array($plugin_file, $active_plugins)) {
+            $active_plugins[] = $plugin_file;
+            update_option('active_plugins', $active_plugins);
+        }
+    }
+    return $response;
+}, 20, 3);
+
 add_action('wp_ajax_nexis_ai_check_update_now', function() {
     check_ajax_referer('nexis_ai_admin_nonce', 'nonce');
     if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'دسترسی غیرمجاز']);
@@ -198,9 +213,7 @@ add_action('wp_ajax_nexis_ai_check_update_now', function() {
     }
 });
 
-// ==========================================
-// موتور لایسنس و شمارنده‌های تفکیک‌شده
-// ==========================================
+// مدیریت لایسنس
 function nexis_ai_validate_license($license_key) {
     if (empty($license_key)) return ['valid' => false, 'message' => 'کلید لایسنس وارد نشده است.'];
     $parts = explode('.', trim($license_key));
@@ -316,9 +329,7 @@ function nexis_ai_increment_request_count() {
     update_option('nexis_ai_trial_requests', $t + 1);
 }
 
-// ==========================================
-// موتور خزش و پایگاه دانش RAG
-// ==========================================
+// پاک‌سازی و استخراج محتوا
 function nexis_ai_clean_content($content) {
     $content = preg_replace('/\[vc_[^\]]+\]|\[\/vc_[^\]]+\]/i', ' ', $content);
     $content = preg_replace('/\[elementor[^\]]*\]/i', ' ', $content);
@@ -470,6 +481,28 @@ function nexis_ai_crawl_all_content() {
     return $count;
 }
 
+// موتور RAG هیبریدی با گسترش معنایی کوئری
+function nexis_ai_expand_query_via_llm($user_query) {
+    $cache_key = 'nexis_exp_' . md5($user_query);
+    $cached = get_transient($cache_key);
+    if ($cached !== false && is_array($cached)) return $cached;
+
+    $prompt = "برای جستجوی بهتر در پایگاه دانش یک وب‌سایت، برای عبارت زیر، حداکثر ۴ واژه کلیدی یا اصطلاح معادل (مترادف معنایی) که ممکن است عنوان یا متن صفحه مرتبط با آن باشد را بنویس.\nتنها خروجی تو کلمات جدا شده با کاما باشد و هیچ توضیح دیگری ننویس.\nعبارت: " . $user_query;
+
+    $response = nexis_ai_call_llm_api("پاسخ فقط کلمات جداشده با کاما است.", $prompt, 40);
+    $terms = [];
+    if (!empty($response) && strpos($response, 'خطا') === false) {
+        $parts = explode(',', str_replace(['،', "\n", '.'], ',', $response));
+        foreach ($parts as $p) {
+            $p = trim($p);
+            if (mb_strlen($p, 'UTF-8') >= 2) $terms[] = $p;
+        }
+    }
+
+    set_transient($cache_key, $terms, 12 * HOUR_IN_SECONDS);
+    return $terms;
+}
+
 function nexis_ai_search_knowledge_base($user_query, $limit = 5) {
     global $wpdb;
     $table_name = $wpdb->prefix . 'nexis_ai_knowledge';
@@ -478,7 +511,7 @@ function nexis_ai_search_knowledge_base($user_query, $limit = 5) {
     $stop_words = [
         'برای', 'یا', 'چه', 'دارید', 'دارین', 'چی', 'هست', 'مشخصات', 'رو', 'بده', 'کن', 'سلام', 'لطفا',
         'مدل', 'هایی', 'میخوام', 'چند', 'یک', 'در', 'به', 'از', 'با', 'بر', 'این', 'آن', 'است', 'شد',
-        'طرز', 'تهیه', 'دستور', 'پخت', 'کجا', 'کدام', 'آیا', 'درباره', 'مربوط', 'می', 'کند', 'بخوام', 'بیاره', 'دارند', 'بهم', 'چیا'
+        'طرز', 'تهیه', 'دستور', 'پخت', 'کجا', 'کدام', 'آیا', 'درباره', 'مربوط', 'می', 'کند', 'بخوام', 'بیاره', 'دارند', 'بهم', 'چیا', 'باید', 'بکنم'
     ];
 
     $raw_words = preg_split('/\s+/u', $norm);
@@ -490,26 +523,38 @@ function nexis_ai_search_knowledge_base($user_query, $limit = 5) {
         }
     }
 
-    if (empty($search_terms)) return [];
+    $perform_search = function($terms) use ($wpdb, $table_name, $limit) {
+        if (empty($terms)) return [];
+        $score_parts = [];
+        $params = [];
+        foreach ($terms as $term) {
+            $like = '%' . $wpdb->esc_like($term) . '%';
+            $score_parts[] = "(CASE WHEN title LIKE %s THEN 8 ELSE 0 END + CASE WHEN content LIKE %s THEN 2 ELSE 0 END)";
+            $params[] = $like;
+            $params[] = $like;
+        }
+        $score_formula = implode(' + ', $score_parts);
+        $query = "SELECT title, url, content, post_type, ($score_formula) as relevance_score 
+                  FROM $table_name 
+                  HAVING relevance_score >= 1 
+                  ORDER BY relevance_score DESC, (post_type = 'product') DESC 
+                  LIMIT %d";
+        $params[] = $limit;
+        return $wpdb->get_results($wpdb->prepare($query, $params), ARRAY_A);
+    };
 
-    $score_parts = [];
-    $params = [];
-    foreach ($search_terms as $term) {
-        $like = '%' . $wpdb->esc_like($term) . '%';
-        $score_parts[] = "(CASE WHEN title LIKE %s THEN 8 ELSE 0 END + CASE WHEN content LIKE %s THEN 2 ELSE 0 END)";
-        $params[] = $like;
-        $params[] = $like;
+    // گام اول: جستجوی سریع مستقیم بدون مصرف توکن
+    $results = $perform_search($search_terms);
+    if (!empty($results)) return $results;
+
+    // گام دوم: بسط معنایی هوشمند فقط در صورت عدم تطابق
+    $expanded_terms = nexis_ai_expand_query_via_llm($user_query);
+    if (!empty($expanded_terms)) {
+        $all_terms = array_unique(array_merge($search_terms, $expanded_terms));
+        $results = $perform_search($all_terms);
     }
 
-    $score_formula = implode(' + ', $score_parts);
-    $query = "SELECT title, url, content, post_type, ($score_formula) as relevance_score 
-              FROM $table_name 
-              HAVING relevance_score >= 1 
-              ORDER BY relevance_score DESC, (post_type = 'product') DESC 
-              LIMIT %d";
-
-    $params[] = $limit;
-    return $wpdb->get_results($wpdb->prepare($query, $params), ARRAY_A);
+    return $results;
 }
 
 function nexis_ai_log_interaction($query, $response, $model, $status) {
@@ -670,7 +715,7 @@ add_action('wp_ajax_nexis_ai_test_endpoint', function() {
     }
 });
 
-function nexis_ai_call_llm_api($system_prompt, $user_message) {
+function nexis_ai_call_llm_api($system_prompt, $user_message, $override_max_tokens = null) {
     $lic = nexis_ai_get_license_status();
     if (!$lic['allowed']) {
         return 'خطای لایسنس: ' . $lic['message'];
@@ -683,7 +728,7 @@ function nexis_ai_call_llm_api($system_prompt, $user_message) {
     $api_key     = !empty($env_config['api_key']) ? trim($env_config['api_key']) : '';
     $base_url    = !empty($env_config['base_url']) ? rtrim(trim($env_config['base_url']), '/') : '';
     $model       = !empty($settings['default_model']) ? trim($settings['default_model']) : 'gpt-4o-mini';
-    $max_tokens  = isset($settings['max_tokens']) ? intval($settings['max_tokens']) : 1024;
+    $max_tokens  = $override_max_tokens ? intval($override_max_tokens) : (isset($settings['max_tokens']) ? intval($settings['max_tokens']) : 1024);
     $temperature = isset($settings['temperature']) ? floatval($settings['temperature']) : 0.3;
     $timeout     = !empty($settings['request_timeout']) ? intval($settings['request_timeout']) : 180;
 
@@ -746,7 +791,7 @@ function nexis_ai_ajax_chat_handler() {
     if (empty($message)) wp_send_json_error(['reply' => 'لطفاً پیامی بنویسید.']);
 
     $settings = get_option('nexis_ai_settings', []);
-    $default_prompt = "تو مشاور ارشد و کارشناس فروش تخصصی محصولات سایت هستی.\n\nاطلاعات و مستندات موثق استخراج‌شده از وب‌سایت:\n{CONTEXT}\n\nدستورالعمل‌ها:\n۱. بر اساس اطلاعات بالا به کاربر پاسخ بده.\n۲. در صورت سوال راجع به استخدام، تماس، درباره ما و محصولات، اطلاعات دقیق را همراه با لینک بده.\n۳. ساختار پاسخ‌ها شیک و با بالت‌پوینت باشد.";
+    $default_prompt = "تو دستیار هوشمند و مشاور ارشد رسمی این وب‌سایت هستی.\n\nاطلاعات و مستندات موثق استخراج‌شده از وب‌سایت:\n{CONTEXT}\n\nدستورالعمل‌ها:\n۱. بر اساس اطلاعات بالا، کامل، دقیق و محترمانه پاسخ بده.\n۲. درباره خدمات، فرصت‌های شغلی و استخدام، تماس، درباره ما و محصولات، اطلاعات دقیق را همراه با لینک بده.\n۳. ساختار پاسخ‌ها شیک، خوانا و با بالت‌پوینت باشد.";
 
     $sys_template = !empty($settings['system_prompt']) ? $settings['system_prompt'] : $default_prompt;
     $offtopic_msg = !empty($settings['offtopic_message']) ? $settings['offtopic_message'] : 'من دستیار هوشمند هستم و تمرکز من راهنمایی شما در زمینه خدمات و محتوای این وب‌سایت است.';
@@ -1046,7 +1091,7 @@ add_action('wp_footer', function () {
             msgs.innerHTML = '';
             var hist = getHistory();
             if (hist.length === 0) {
-                var welcome = { sender: 'bot', text: 'سلام! چطور می‌توانم درباره خدمات و محصولات وب‌سایت راهنمایی‌تان کنم؟' };
+                var welcome = { sender: 'bot', text: 'سلام! چطور می‌توانم درباره خدمات و محتوای وب‌سایت راهنمایی‌تان کنم؟' };
                 hist.push(welcome);
                 saveHistory(hist);
             }
@@ -1140,7 +1185,6 @@ add_action('wp_footer', function () {
         send.onclick = doSend;
         input.onkeypress = function(e){ if (e.key === 'Enter') doSend(); };
 
-        // هندلر کلیک روی دکمه‌های پرامپت آماده
         var promptChips = document.querySelectorAll('.nexis-prompt-chip');
         promptChips.forEach(function(chip) {
             chip.onclick = function() {
@@ -1153,7 +1197,7 @@ add_action('wp_footer', function () {
     <?php
 });
 
-// منوی مدیریت در پیشخوان
+// منوهای مدیریت در پیشخوان
 add_action('admin_menu', function () {
     add_menu_page('Nexis AI Engine', 'هوش مصنوعی Nexis', 'manage_options', 'nexis-ai-settings', 'nexis_ai_render_settings_page', 'dashicons-rest-api', 30);
     add_submenu_page('nexis-ai-settings', 'تنظیمات و مدل‌ها', 'تنظیمات و مدل‌ها', 'manage_options', 'nexis-ai-settings', 'nexis_ai_render_settings_page');
@@ -1163,16 +1207,13 @@ add_action('admin_menu', function () {
     add_submenu_page('nexis-ai-settings', 'تاریخچه چت', 'تاریخچه و لاگ چت', 'manage_options', 'nexis-ai-logs', 'nexis_ai_render_logs_page');
 });
 
-// لود اسکریپت مدیا آپلودر وردپرس در صفحات ادمین افزونه
 add_action('admin_enqueue_scripts', function($hook) {
     if (strpos($hook, 'nexis-ai') !== false) {
         wp_enqueue_media();
     }
 });
 
-// ==========================================
-// صفحه تنظیمات عمومی و مدل‌ها
-// ==========================================
+// صفحه تنظیمات عمومی
 function nexis_ai_render_settings_page() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'nexis_ai_knowledge';
@@ -1241,11 +1282,9 @@ function nexis_ai_render_settings_page() {
         $settings['enable_auto_schema']   = isset($_POST['enable_auto_schema']) ? '1' : '0';
         $settings['offtopic_message']     = sanitize_textarea_field($_POST['offtopic_message']);
 
-        // سوالات پیشنهادی
         $settings['enable_quick_prompts'] = isset($_POST['enable_quick_prompts']) ? '1' : '0';
         $settings['quick_prompts_list']   = sanitize_textarea_field($_POST['quick_prompts_list']);
 
-        // ظاهر و آپلود تصاویر
         $settings['widget_position']      = sanitize_text_field($_POST['widget_position']);
         $settings['widget_offset_x']      = intval($_POST['widget_offset_x']);
         $settings['widget_offset_y']      = intval($_POST['widget_offset_y']);
@@ -1270,7 +1309,7 @@ function nexis_ai_render_settings_page() {
     $available_launchers = ['💬', '🤖', '💭', '🗨️', '🎧', '⚡', '❓', '📦', '🏢', '✨'];
     $available_avatars   = ['👨‍💼', '👩‍💼', '🤖', '🎧', '👤', '🛡️', '🌟', '💼', '🎯', '🏭'];
 
-    $default_prompt = "تو مشاور ارشد و کارشناس فروش تخصصی محصولات سایت هستی.\n\nاطلاعات و مستندات موثق استخراج‌شده از وب‌سایت:\n{CONTEXT}\n\nدستورالعمل‌ها:\n۱. بر اساس اطلاعات بالا به کاربر پاسخ بده.\n۲. در صورت سوال راجع به استخدام، تماس، درباره ما و محصولات، اطلاعات دقیق را همراه با لینک بده.\n۳. ساختار پاسخ‌ها شیک و با بالت‌پوینت باشد.";
+    $default_prompt = "تو دستیار هوشمند و مشاور ارشد رسمی این وب‌سایت هستی.\n\nاطلاعات و مستندات موثق استخراج‌شده از وب‌سایت:\n{CONTEXT}\n\nدستورالعمل‌ها:\n۱. بر اساس اطلاعات بالا، کامل، دقیق و محترمانه پاسخ بده.\n۲. درباره خدمات، فرصت‌های شغلی و استخدام، تماس، درباره ما و محصولات، اطلاعات دقیق را همراه با لینک بده.\n۳. ساختار پاسخ‌ها شیک، خوانا و با بالت‌پوینت باشد.";
     ?>
     <style>
         .nexis-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 22px; margin-bottom: 22px; box-shadow: 0 1px 3px rgba(0,0,0,0.03); }
@@ -1450,7 +1489,7 @@ function nexis_ai_render_settings_page() {
                 </div>
             </div>
 
-            <!-- پارامترهای پردازشی LLM -->
+            <!-- پارامترهای هوش مصنوعی -->
             <div class="nexis-card">
                 <h3 style="margin-top: 0; color: #0073aa; border-bottom: 1px solid #eee; padding-bottom: 10px;">پارامترهای پردازشی (Context & Generation)</h3>
                 <div style="display: flex; gap: 20px; align-items: center; flex-wrap: wrap;">
@@ -1638,7 +1677,6 @@ function nexis_ai_render_settings_page() {
     jQuery(document).ready(function($) {
         populateModelDropdown($('#active_env_select').val(), currentDefaultModel);
 
-        // آپلودر رسانه وردپرس
         $('.nexis-upload-media-btn').on('click', function(e) {
             e.preventDefault();
             var targetInput = $($(this).data('target'));
@@ -1902,9 +1940,7 @@ function nexis_ai_render_settings_page() {
     <?php
 }
 
-// ==========================================
-// صفحه منوی درختی (Tree-View Content Selector)
-// ==========================================
+// صفحه انتخاب درختی صفحات
 function nexis_ai_render_tree_page() {
     $settings = get_option('nexis_ai_settings', []);
 
@@ -1942,7 +1978,6 @@ function nexis_ai_render_tree_page() {
                 <button type="button" class="button" id="btn-uncheck-all">لغو انتخاب همه</button>
             </div>
 
-            <!-- شاخه برگه‌ها -->
             <div class="nexis-tree-branch">
                 <h3 style="margin-top:0; color:#0073aa; border-bottom:1px solid #eee; padding-bottom:8px;">📄 برگه‌های وب‌سایت (Pages)</h3>
                 <ul class="nexis-tree-list">
@@ -1960,7 +1995,6 @@ function nexis_ai_render_tree_page() {
                 </ul>
             </div>
 
-            <!-- شاخه محصولات -->
             <?php if (!empty($products)): ?>
                 <div class="nexis-tree-branch">
                     <h3 style="margin-top:0; color:#0073aa; border-bottom:1px solid #eee; padding-bottom:8px;">📦 محصولات فروشگاه (WooCommerce Products)</h3>
@@ -1980,7 +2014,6 @@ function nexis_ai_render_tree_page() {
                 </div>
             <?php endif; ?>
 
-            <!-- شاخه مقالات -->
             <?php if (!empty($posts)): ?>
                 <div class="nexis-tree-branch">
                     <h3 style="margin-top:0; color:#0073aa; border-bottom:1px solid #eee; padding-bottom:8px;">✍️ نوشته‌ها و مقالات وبلاگ (Posts)</h3>
@@ -2014,9 +2047,7 @@ function nexis_ai_render_tree_page() {
     <?php
 }
 
-// ==========================================
-// صفحه سئو و ممیزی معنایی GEO (همراه با شاخص‌های داینامیک و صفحه‌بندی)
-// ==========================================
+// صفحه سئو و ممیزی معنایی GEO
 function nexis_ai_render_geo_page() {
     $settings = get_option('nexis_ai_settings', []);
 
@@ -2090,7 +2121,6 @@ function nexis_ai_render_geo_page() {
     <div class="wrap" style="direction: rtl; text-align: right; max-width: 1200px;">
         <h1 style="margin-bottom: 15px;">ممیزی سئو معنایی و هوش مصنوعی نکسیس (GEO Audit & Technical SEO)</h1>
 
-        <!-- نوار تنظیم شاخص‌های داینامیک -->
         <form method="post" action="" style="background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:15px; margin-bottom:20px; display:flex; gap:15px; align-items:center; flex-wrap:wrap;">
             <?php wp_nonce_field('nexis_geo_nonce'); ?>
             <div>
@@ -2195,7 +2225,6 @@ function nexis_ai_render_geo_page() {
             </tbody>
         </table>
 
-        <!-- نوار صفحه‌بندی کامل و استاندارد بخش سئو -->
         <?php if ($total_pages > 1): ?>
             <div class="tablenav" style="margin-top: 15px;">
                 <div class="tablenav-pages">
@@ -2215,7 +2244,7 @@ function nexis_ai_render_geo_page() {
             </div>
         <?php endif; ?>
 
-        <!-- مودال خروجی سئو -->
+        <!-- مودال سئو -->
         <div id="nexis-seo-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.65); z-index: 999999; justify-content: center; align-items: center;">
             <div style="background: #fff; width: 700px; max-width: 90vw; max-height: 85vh; border-radius: 12px; overflow-y: auto; padding: 25px; position: relative;">
                 <span id="nexis-close-modal" style="position: absolute; top: 15px; left: 20px; font-size: 22px; cursor: pointer; color: #888;">✕</span>
@@ -2302,9 +2331,7 @@ function nexis_ai_render_geo_page() {
     <?php
 }
 
-// ==========================================
 // صفحه مدیریت لایسنس
-// ==========================================
 function nexis_ai_render_license_page() {
     $settings = get_option('nexis_ai_settings', []);
 
@@ -2338,7 +2365,6 @@ function nexis_ai_render_license_page() {
                 </span>
             </div>
 
-            <!-- پنل دوگانه وضعیت شمارنده‌ها -->
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 22px;">
                 <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 18px;">
                     <span style="display: block; font-size: 12.5px; color: #64748b; margin-bottom: 4px;">تعداد ریکوئست‌های رایگان (Trial):</span>
@@ -2395,9 +2421,7 @@ function nexis_ai_render_license_page() {
     <?php
 }
 
-// ==========================================
-// صفحه تاریخچه مکالمات با تاریخ شمسی و حفظ فیلترها
-// ==========================================
+// صفحه تاریخچه مکالمات
 function nexis_ai_render_logs_page() {
     global $wpdb;
     $table_logs = $wpdb->prefix . 'nexis_ai_logs';
@@ -2502,7 +2526,6 @@ function nexis_ai_render_logs_page() {
             </tbody>
         </table>
 
-        <!-- صفحه‌بندی با حفظ کامل پارامترهای جستجو -->
         <?php if ($total_pages > 1): ?>
             <div class="tablenav" style="margin-top: 15px;">
                 <div class="tablenav-pages">
