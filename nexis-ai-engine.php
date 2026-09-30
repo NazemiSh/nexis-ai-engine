@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Nexis AI Engine
  * Plugin URI: https://github.com/NazemiSh/nexis-ai-engine
- * Description: پلتفرم سازمانی هوش مصنوعی و بهینه‌ساز سئو معنایی (GEO) وردپرس با موتور RAG هیبریدی، واژه‌نامه مترادف هوشمند، لاگ‌های شبکه API، بکاپ امنیتی و تفکیک مدل‌ها
- * Version: 1.0.8
+ * Description: پلتفرم سازمانی هوش مصنوعی و بهینه‌ساز سئو معنایی (GEO) وردپرس با موتور RAG هیبریدی، واژه‌نامه مترادف هوشمند، تفکیک مستقل اندپوینت‌های چت و سئو، بکاپ امنیتی و لاگ‌های فنی شبکه
+ * Version: 1.0.9
  * Author: Nexis AI Core
  * Author URI: https://github.com/NazemiSh
  * Text Domain: nexis-ai-engine
@@ -11,7 +11,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('NEXIS_AI_VERSION', '1.0.8');
+define('NEXIS_AI_VERSION', '1.0.9');
 define('NEXIS_AI_GITHUB_REPO', 'NazemiSh/nexis-ai-engine');
 define('NEXIS_AI_SECRET_SALT', 'NEXIS_CORE_SECURE_SALT_99812_xK9#');
 define('NEXIS_AI_GITHUB_TOKEN', '');
@@ -55,12 +55,14 @@ function nexis_ai_create_db_tables() {
         id bigint(20) NOT NULL AUTO_INCREMENT,
         endpoint_url text NOT NULL,
         model_used varchar(100) DEFAULT '',
+        module_type varchar(50) DEFAULT 'chat',
         http_code int(5) NOT NULL,
         response_time float DEFAULT 0,
         error_message text DEFAULT '',
         created_at datetime DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY  (id),
         KEY http_code_idx (http_code),
+        KEY module_type_idx (module_type),
         KEY created_at_idx (created_at)
     ) $charset_collate;";
 
@@ -78,7 +80,7 @@ add_action('plugins_loaded', function() {
     }
 });
 
-// تقویم شمسی جلالی
+// تبدیل تقویم میلادی به جلالی
 function nexis_ai_gregorian_to_jalali($gy, $gm, $gd) {
     $g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
     $jy = ($gy <= 1600) ? 0 : 979;
@@ -119,7 +121,7 @@ function nexis_ai_format_persian_datetime($datetime_str) {
     return sprintf('%04d/%02d/%02d %s', $jy, $jm, $jd, $time_part);
 }
 
-// موتور بررسی خودکار بروزرسانی از گیت‌هاب
+// موتور آپدیت خودکار گیت‌هاب
 function nexis_ai_check_github_update() {
     $url = 'https://api.github.com/repos/' . NEXIS_AI_GITHUB_REPO . '/releases/latest';
     $headers = [
@@ -337,8 +339,8 @@ function nexis_ai_increment_request_count() {
     update_option('nexis_ai_trial_requests', $t + 1);
 }
 
-// ثبت لاگ اختصاصی شبکه و API
-function nexis_ai_log_api_call($url, $model, $code, $time, $error = '') {
+// ثبت لاگ اختصاصی شبکه
+function nexis_ai_log_api_call($url, $model, $code, $time, $error = '', $module_type = 'chat') {
     global $wpdb;
     $table = $wpdb->prefix . 'nexis_ai_api_logs';
     $wpdb->insert(
@@ -346,16 +348,17 @@ function nexis_ai_log_api_call($url, $model, $code, $time, $error = '') {
         [
             'endpoint_url'  => esc_url_raw($url),
             'model_used'    => sanitize_text_field($model),
+            'module_type'   => sanitize_text_field($module_type),
             'http_code'     => intval($code),
             'response_time' => floatval($time),
             'error_message' => sanitize_text_field(mb_substr($error, 0, 500, 'UTF-8')),
             'created_at'    => current_time('mysql')
         ],
-        ['%s', '%s', '%d', '%f', '%s', '%s']
+        ['%s', '%s', '%s', '%d', '%f', '%s', '%s']
     );
 }
 
-// استخراج عمیق المان‌های المنتور
+// استخراج بازگشتی المنتور
 function nexis_ai_extract_elementor_texts($elements, &$extracted = []) {
     if (!is_array($elements)) return;
     foreach ($elements as $el) {
@@ -394,7 +397,7 @@ function nexis_ai_clean_content($content) {
     return trim($content);
 }
 
-// تابع استاندارد نرمالایز حروف (بدون هیچ هاردکد صنفی)
+// نرمالایز حروف الفبا بدون هاردکد صنفی
 function nexis_ai_normalize_text($str) {
     $str = mb_strtolower($str, 'UTF-8');
     $str = str_replace(
@@ -570,7 +573,6 @@ function nexis_ai_get_synonyms_map() {
     return $map;
 }
 
-// موتور RAG استاندارد با واژه‌نامه سفارشی و بدون هاردکد
 function nexis_ai_expand_query_via_llm($user_query) {
     $cache_key = 'nexis_exp_' . md5($user_query);
     $cached = get_transient($cache_key);
@@ -614,7 +616,6 @@ function nexis_ai_search_knowledge_base($user_query, $limit = 5) {
         }
     }
 
-    // افزودن خودکار مترادف‌های تعریف‌شده توسط ادمین به عبارات جستجو
     $syn_map = nexis_ai_get_synonyms_map();
     foreach ($search_terms as $term) {
         if (isset($syn_map[$term])) {
@@ -633,7 +634,6 @@ function nexis_ai_search_knowledge_base($user_query, $limit = 5) {
 
         foreach ($terms as $term) {
             $like = '%' . $wpdb->esc_like($term) . '%';
-            // وزن‌دهی استاندارد زبانی: عنوان دو برابر متن امتیاز دارد
             $score_parts[] = "(CASE WHEN title LIKE %s THEN 20 WHEN content LIKE %s THEN 10 ELSE 0 END)";
             $params[] = $like;
             $params[] = $like;
@@ -812,7 +812,7 @@ add_action('wp_ajax_nexis_ai_fetch_models', function() {
     wp_send_json_success(['models' => $models, 'count' => count($models)]);
 });
 
-// تست اتصال
+// تست اتصال سرور
 add_action('wp_ajax_nexis_ai_test_endpoint', function() {
     check_ajax_referer('nexis_ai_admin_nonce', 'nonce');
     if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'دسترسی غیرمجاز']);
@@ -850,23 +850,23 @@ add_action('wp_ajax_nexis_ai_test_endpoint', function() {
     $latency = round(microtime(true) - $start_t, 3);
 
     if (is_wp_error($response)) {
-        nexis_ai_log_api_call($base_url, $model, 0, $latency, $response->get_error_message());
+        nexis_ai_log_api_call($base_url, $model, 0, $latency, $response->get_error_message(), 'test');
         wp_send_json_error(['message' => 'خطا در شبکه: ' . $response->get_error_message()]);
     }
 
     $code = wp_remote_retrieve_response_code($response);
     if ($code >= 200 && $code < 300) {
-        nexis_ai_log_api_call($base_url, $model, $code, $latency, '');
+        nexis_ai_log_api_call($base_url, $model, $code, $latency, '', 'test');
         wp_send_json_success(['message' => "اتصال برقرار شد! پاسخ در {$latency} ثانیه دریافت شد."]);
     } else {
         $body = json_decode(wp_remote_retrieve_body($response), true);
         $err = isset($body['error']['message']) ? $body['error']['message'] : "کد وضعیت HTTP: $code";
-        nexis_ai_log_api_call($base_url, $model, $code, $latency, $err);
+        nexis_ai_log_api_call($base_url, $model, $code, $latency, $err, 'test');
         wp_send_json_error(['message' => $err]);
     }
 });
 
-// فراخوانی LLM با تفکیک مدل چت و سئو
+// ارسال درخواست به LLM با تفکیک مستقل سرور/اندپوینت و مدل برای چت و سئو
 function nexis_ai_call_llm_api($system_prompt, $user_message, $override_max_tokens = null, $module_type = 'chat') {
     $lic = nexis_ai_get_license_status();
     if (!$lic['allowed']) {
@@ -874,24 +874,26 @@ function nexis_ai_call_llm_api($system_prompt, $user_message, $override_max_toke
     }
 
     $settings = get_option('nexis_ai_settings', []);
-    $active_env = !empty($settings['active_env']) ? $settings['active_env'] : 'default_env';
-    $env_config = isset($settings['environments'][$active_env]) ? $settings['environments'][$active_env] : [];
-
-    $api_key     = !empty($env_config['api_key']) ? trim($env_config['api_key']) : '';
-    $base_url    = !empty($env_config['base_url']) ? rtrim(trim($env_config['base_url']), '/') : '';
-
-    if ($module_type === 'seo' && !empty($settings['seo_model'])) {
-        $model = trim($settings['seo_model']);
+    
+    // تعیین اندپوینت و مدل به صورت تفکیک‌شده
+    if ($module_type === 'seo') {
+        $active_env = !empty($settings['seo_env']) ? $settings['seo_env'] : (!empty($settings['active_env']) ? $settings['active_env'] : 'env_1');
+        $model      = !empty($settings['seo_model']) ? trim($settings['seo_model']) : (!empty($settings['default_model']) ? trim($settings['default_model']) : 'gpt-4o-mini');
     } else {
-        $model = !empty($settings['default_model']) ? trim($settings['default_model']) : 'gpt-4o-mini';
+        $active_env = !empty($settings['active_env']) ? $settings['active_env'] : 'env_1';
+        $model      = !empty($settings['default_model']) ? trim($settings['default_model']) : 'gpt-4o-mini';
     }
+
+    $env_config = isset($settings['environments'][$active_env]) ? $settings['environments'][$active_env] : [];
+    $api_key    = !empty($env_config['api_key']) ? trim($env_config['api_key']) : '';
+    $base_url   = !empty($env_config['base_url']) ? rtrim(trim($env_config['base_url']), '/') : '';
 
     $max_tokens  = $override_max_tokens ? intval($override_max_tokens) : (isset($settings['max_tokens']) ? intval($settings['max_tokens']) : 1024);
     $temperature = isset($settings['temperature']) ? floatval($settings['temperature']) : 0.3;
     $timeout     = !empty($settings['request_timeout']) ? intval($settings['request_timeout']) : 180;
 
     if (empty($base_url)) {
-        return 'خطا: آدرس سرور هوش مصنوعی برای محیط فعال تنظیم نشده است.';
+        return 'خطا: آدرس سرور برای ماژول فراخوانی‌شده تنظیم نشده است.';
     }
 
     $headers = [
@@ -920,7 +922,7 @@ function nexis_ai_call_llm_api($system_prompt, $user_message, $override_max_toke
     $latency = round(microtime(true) - $start_t, 3);
 
     if (is_wp_error($response)) {
-        nexis_ai_log_api_call($base_url, $model, 0, $latency, $response->get_error_message());
+        nexis_ai_log_api_call($base_url, $model, 0, $latency, $response->get_error_message(), $module_type);
         return 'خطای ارتباط: ' . $response->get_error_message();
     }
 
@@ -929,14 +931,14 @@ function nexis_ai_call_llm_api($system_prompt, $user_message, $override_max_toke
 
     if ($code >= 200 && $code < 300 && isset($body['choices'][0]['message']['content'])) {
         nexis_ai_increment_request_count();
-        nexis_ai_log_api_call($base_url, $model, $code, $latency, '');
+        nexis_ai_log_api_call($base_url, $model, $code, $latency, '', $module_type);
         $txt = trim($body['choices'][0]['message']['content']);
         $txt = preg_replace('/<think>.*?<\/think>/is', '', $txt);
         return trim($txt);
     }
 
     $err = isset($body['error']['message']) ? $body['error']['message'] : "کد خطا HTTP: $code";
-    nexis_ai_log_api_call($base_url, $model, $code, $latency, $err);
+    nexis_ai_log_api_call($base_url, $model, $code, $latency, $err, $module_type);
 
     return 'خطای ارائه‌دهنده هوش مصنوعی: ' . $err;
 }
@@ -958,7 +960,7 @@ function nexis_ai_ajax_chat_handler() {
     if (empty($message)) wp_send_json_error(['reply' => 'لطفاً پیامی بنویسید.']);
 
     $settings = get_option('nexis_ai_settings', []);
-    $default_prompt = "تو مشاور رسمی و راهنمای تخصصی این وب‌سایت هستی.\n\nاطلاعات و مستندات موثق وب‌سایت:\n{CONTEXT}\n\nدستورالعمل‌ها:\n۱. با اتکا به مستندات بالا، پاسخ کامل و حرفه‌ای بده.\n۲. درباره خدمات، فرصت‌های شغلی و استخدام، تماس، درباره ما و محصولات، نام و لینک صفحه مربوطه را حتماً در متن به شکل [نام صفحه](لینک) بیاور.\n۳. ساختار پاسخ‌ها شیک، خوانا و با بالت‌پوینت باشد.";
+    $default_prompt = "تو مشاور رسمی و راهنمای تخصصی این وب‌سایت هستی.\n\nاطلاعات و مستندات موثق وب‌‌سایت:\n{CONTEXT}\n\nدستورالعمل‌ها:\n۱. با اتکا به مستندات بالا، پاسخ کامل و حرفه‌ای بده.\n۲. درباره خدمات، فرصت‌های شغلی و استخدام، تماس، درباره ما و محصولات، نام و لینک صفحه مربوطه را حتماً در متن به شکل [نام صفحه](لینک) بیاور.\n۳. ساختار پاسخ‌ها شیک، خوانا و با بالت‌پوینت باشد.";
 
     $sys_template = !empty($settings['system_prompt']) ? $settings['system_prompt'] : $default_prompt;
     $offtopic_msg = !empty($settings['offtopic_message']) ? $settings['offtopic_message'] : 'من دستیار هوشمند هستم و تمرکز من راهنمایی شما در زمینه خدمات و محتوای این وب‌سایت است.';
@@ -1050,18 +1052,16 @@ add_action('wp_ajax_nexis_ai_generate_seo', function() {
 
 // اکشن‌های بکاپ امن، ریستور و پاک‌سازی لاگ‌ها
 add_action('admin_init', function() {
-    // بکاپ امن (Export JSON) بدون لایسنس و بدون کلیدهای API
+    // بکاپ امن بدون لایسنس و توکن‌های API
     if (isset($_GET['page']) && $_GET['page'] === 'nexis-ai-settings' && isset($_GET['action']) && $_GET['action'] === 'export_backup') {
         if (!current_user_can('manage_options')) wp_die('دسترسی غیرمجاز');
 
         $all_settings = get_option('nexis_ai_settings', []);
         
-        // حذف کلید لایسنس
         if (isset($all_settings['license_key'])) {
             unset($all_settings['license_key']);
         }
 
-        // حذف کلیدهای API تمامی محیط‌ها جهت حفظ کامل امنیت
         if (isset($all_settings['environments']) && is_array($all_settings['environments'])) {
             foreach ($all_settings['environments'] as $env_id => &$env_data) {
                 if (isset($env_data['api_key'])) {
@@ -1084,7 +1084,7 @@ add_action('admin_init', function() {
         exit;
     }
 
-    // بازیابی هوشمند (Import JSON) با حفظ قطعی لایسنس و توکن‌های موجود
+    // بازیابی هوشمند با حفظ لایسنس و توکن‌های هاست
     if (isset($_POST['nexis_ai_import_backup']) && check_admin_referer('nexis_ai_backup_nonce')) {
         if (!current_user_can('manage_options')) wp_die('دسترسی غیرمجاز');
 
@@ -1096,10 +1096,8 @@ add_action('admin_init', function() {
                 $current_settings = get_option('nexis_ai_settings', []);
                 $imported_settings = $parsed['settings'];
 
-                // حفظ لایسنس فعلی سایت
                 $imported_settings['license_key'] = !empty($current_settings['license_key']) ? $current_settings['license_key'] : '';
 
-                // ادغام امن محیط‌ها: حفظ کلیدهای API موجود
                 if (isset($current_settings['environments']) && is_array($current_settings['environments'])) {
                     foreach ($current_settings['environments'] as $eid => $edata) {
                         if (!empty($edata['api_key']) && isset($imported_settings['environments'][$eid])) {
@@ -1117,7 +1115,7 @@ add_action('admin_init', function() {
         }
     }
 
-    // خروجی CSV تاریخچه چت
+    // خروجی CSV لاگ‌های چت
     if (isset($_GET['page']) && $_GET['page'] === 'nexis-ai-logs' && isset($_GET['action']) && $_GET['action'] === 'export_csv') {
         if (!current_user_can('manage_options')) wp_die('دسترسی غیرمجاز');
 
@@ -1472,16 +1470,16 @@ add_action('wp_footer', function () {
     <?php
 });
 
-// منوهای مدیریت در پیشخوان
+// منوهای مدیریت وردپرس همراه با آیکون‌های کامل
 add_action('admin_menu', function () {
     add_menu_page('Nexis AI Engine', 'هوش مصنوعی Nexis', 'manage_options', 'nexis-ai-settings', 'nexis_ai_render_settings_page', 'dashicons-rest-api', 30);
-    add_submenu_page('nexis-ai-settings', 'تنظیمات و مدل‌ها', 'تنظیمات و مدل‌ها', 'manage_options', 'nexis-ai-settings', 'nexis_ai_render_settings_page');
-    add_submenu_page('nexis-ai-settings', 'واژه‌نامه و مترادف‌ها', '📚 واژه‌نامه مترادف‌ها', 'manage_options', 'nexis-ai-synonyms', 'nexis_ai_render_synonyms_page');
-    add_submenu_page('nexis-ai-settings', 'انتخاب صفحات خزش (Tree-View)', '🌳 انتخاب صفحات خزش', 'manage_options', 'nexis-ai-tree', 'nexis_ai_render_tree_page');
-    add_submenu_page('nexis-ai-settings', 'سئو و بهینه‌سازی (GEO)', 'سئو و بهینه‌سازی (GEO)', 'manage_options', 'nexis-ai-geo', 'nexis_ai_render_geo_page');
-    add_submenu_page('nexis-ai-settings', 'مدیریت لایسنس', '🔑 مدیریت لایسنس', 'manage_options', 'nexis-ai-license', 'nexis_ai_render_license_page');
-    add_submenu_page('nexis-ai-settings', 'تاریخچه مکالمات', 'تاریخچه چت', 'manage_options', 'nexis-ai-logs', 'nexis_ai_render_logs_page');
-    add_submenu_page('nexis-ai-settings', 'لاگ‌های شبکه API', '📡 لاگ‌های فنی API', 'manage_options', 'nexis-ai-api-logs', 'nexis_ai_render_api_logs_page');
+    add_submenu_page('nexis-ai-settings', '⚙️️ تنظیمات و مدل‌ها', '⚙️ تنظیمات و مدل‌ها', 'manage_options', 'nexis-ai-settings', 'nexis_ai_render_settings_page');
+    add_submenu_page('nexis-ai-settings', '📚 واژه‌نامه مترادف‌ها', '📚 واژه‌نامه مترادف‌ها', 'manage_options', 'nexis-ai-synonyms', 'nexis_ai_render_synonyms_page');
+    add_submenu_page('nexis-ai-settings', '🌳 انتخاب صفحات خزش', '🌳 انتخاب صفحات خزش', 'manage_options', 'nexis-ai-tree', 'nexis_ai_render_tree_page');
+    add_submenu_page('nexis-ai-settings', '🎯 سئو و بهینه‌سازی (GEO)', '🎯 سئو و بهینه‌سازی (GEO)', 'manage_options', 'nexis-ai-geo', 'nexis_ai_render_geo_page');
+    add_submenu_page('nexis-ai-settings', '🔑 مدیریت لایسنس', '🔑 مدیریت لایسنس', 'manage_options', 'nexis-ai-license', 'nexis_ai_render_license_page');
+    add_submenu_page('nexis-ai-settings', '💬 تاریخچه مکالمات', '💬 تاریخچه مکالمات', 'manage_options', 'nexis-ai-logs', 'nexis_ai_render_logs_page');
+    add_submenu_page('nexis-ai-settings', '📡 لاگ‌های فنی API', '📡 لاگ‌های فنی API', 'manage_options', 'nexis-ai-api-logs', 'nexis_ai_render_api_logs_page');
 });
 
 add_action('admin_enqueue_scripts', function($hook) {
@@ -1548,6 +1546,7 @@ function nexis_ai_render_settings_page() {
         $settings['environments']         = $new_envs;
         $settings['active_env']           = sanitize_key($_POST['active_env']);
         $settings['default_model']        = sanitize_text_field($_POST['default_model']);
+        $settings['seo_env']              = sanitize_key($_POST['seo_env']);
         $settings['seo_model']            = sanitize_text_field($_POST['seo_model']);
 
         $settings['relevance_threshold']  = intval($_POST['relevance_threshold']);
@@ -1586,6 +1585,7 @@ function nexis_ai_render_settings_page() {
 
     $active_env          = !empty($settings['active_env']) ? $settings['active_env'] : key($envs);
     $default_model       = !empty($settings['default_model']) ? $settings['default_model'] : '';
+    $seo_env             = !empty($settings['seo_env']) ? $settings['seo_env'] : $active_env;
     $seo_model           = !empty($settings['seo_model']) ? $settings['seo_model'] : '';
     $request_timeout     = !empty($settings['request_timeout']) ? intval($settings['request_timeout']) : 180;
     $relevance_threshold = isset($settings['relevance_threshold']) ? intval($settings['relevance_threshold']) : 3;
@@ -1605,7 +1605,6 @@ function nexis_ai_render_settings_page() {
         .nexis-tab-pane { display: none; }
         .nexis-tab-pane.active { display: block; }
         .active-endpoint-card { background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 18px; margin-bottom: 22px; }
-        .active-badge { background: #dbeafe; color: #1e40af; padding: 3px 10px; border-radius: 6px; font-weight: bold; font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
         .nexis-models-table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 12.5px; }
         .nexis-models-table th, .nexis-models-table td { border: 1px solid #e2e8f0; padding: 8px 12px; text-align: right; }
         .nexis-models-table th { background: #f8fafc; }
@@ -1643,7 +1642,7 @@ function nexis_ai_render_settings_page() {
             </div>
         </div>
 
-        <!-- ابزار تست زنده RAG بدون مثال‌های اختصاصی -->
+        <!-- ابزار تست زنده RAG -->
         <div class="nexis-card" style="background: #fdfdfd; border: 2px dashed #0073aa;">
             <h3 style="margin-top: 0; color: #0073aa; display: flex; align-items: center; gap: 8px;">
                 🔍 ابزار ارزیابی و تست زنده جستجوی پایگاه دانش (RAG Search Tester)
@@ -1664,38 +1663,43 @@ function nexis_ai_render_settings_page() {
         <form method="post" action="" id="nexis-settings-form">
             <?php wp_nonce_field('nexis_ai_nonce'); ?>
 
-            <!-- پنل سرور و مدل‌های تفکیک‌شده -->
+            <!-- پنل تفکیک کامل محیط و مدل برای چت و سئو -->
             <div class="active-endpoint-card">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                    <div>
-                        <strong style="font-size: 16px;" id="active-env-title"><?php echo esc_html(isset($envs[$active_env]['name']) ? $envs[$active_env]['name'] : 'پیش‌فرض'); ?></strong>
-                        <span class="active-badge">✔ Active Endpoint</span>
-                    </div>
-                    <div>
-                        <button type="button" class="button button-secondary" id="btn-quick-test" style="font-weight: bold;">⚡ تست اتصال سرور فعال (Test Connection)</button>
-                    </div>
-                </div>
+                <h3 style="margin-top: 0; color: #1e40af; border-bottom: 1px solid #bfdbfe; padding-bottom: 10px;">
+                    🔀 تفکیک سرور و مدل‌های اختصاصی سامانه
+                </h3>
 
-                <div style="display: grid; grid-template-columns: 240px 1fr 1fr; gap: 20px; align-items: flex-start;">
-                    <div>
-                        <label style="font-weight: bold; display: block; margin-bottom: 6px;">محیط اتصال فعال:</label>
-                        <select name="active_env" id="active_env_select" style="width: 100%; padding: 8px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 25px; margin-top: 15px;">
+                    <!-- ماژول چت‌بات -->
+                    <div style="background: #fff; padding: 16px; border-radius: 8px; border: 1px solid #cbd5e1;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                            <strong style="color: #0073aa; font-size: 14.5px;">💬 ماژول چت‌بات فرانت‌اند</strong>
+                            <span style="background: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold;">پاسخگویی زنده</span>
+                        </div>
+                        <label style="font-weight: bold; display: block; margin-bottom: 4px;">سرور/اندپوینت چت:</label>
+                        <select name="active_env" id="active_env_select" style="width: 100%; padding: 7px; margin-bottom: 10px;">
                             <?php foreach ($envs as $eid => $e): ?>
                                 <option value="<?php echo esc_attr($eid); ?>" <?php selected($active_env, $eid); ?>><?php echo esc_html(!empty($e['name']) ? $e['name'] : 'محیط'); ?></option>
                             <?php endforeach; ?>
                         </select>
+                        <label style="font-weight: bold; display: block; margin-bottom: 4px;">شناسه مدل چت:</label>
+                        <input type="text" name="default_model" id="default_model_input" value="<?php echo esc_attr($default_model); ?>" class="large-text" style="direction: ltr; font-weight: bold;" placeholder="مثلاً: gpt-4o-mini">
                     </div>
 
-                    <div>
-                        <label style="font-weight: bold; display: block; margin-bottom: 6px;">مدل چت‌بات فرانت‌اند (Chat Model):</label>
-                        <input type="text" name="default_model" id="default_model_input" value="<?php echo esc_attr($default_model); ?>" class="large-text" style="direction: ltr; font-weight: bold;" placeholder="شناسه مدل چت">
-                        <small style="color: #64748b; display: block; margin-top: 4px;">مدل سریع و بهینه برای پاسخگویی به کاربران</small>
-                    </div>
-
-                    <div>
-                        <label style="font-weight: bold; display: block; margin-bottom: 6px;">مدل سئو و متادیتا (SEO & GEO Model):</label>
-                        <input type="text" name="seo_model" id="seo_model_input" value="<?php echo esc_attr($seo_model); ?>" class="large-text" style="direction: ltr; font-weight: bold;" placeholder="شناسه مدل تحلیلی سئو">
-                        <small style="color: #64748b; display: block; margin-top: 4px;">در صورت خالی بودن، از مدل چت استفاده می‌شود</small>
+                    <!-- ماژول سئو و تحلیل -->
+                    <div style="background: #fff; padding: 16px; border-radius: 8px; border: 1px solid #cbd5e1;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                            <strong style="color: #166534; font-size: 14.5px;">🎯 ماژول تحلیل سئو و اسکیما (GEO)</strong>
+                            <span style="background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold;">پردازش تحلیلی</span>
+                        </div>
+                        <label style="font-weight: bold; display: block; margin-bottom: 4px;">سرور/اندپوینت سئو:</label>
+                        <select name="seo_env" id="seo_env_select" style="width: 100%; padding: 7px; margin-bottom: 10px;">
+                            <?php foreach ($envs as $eid => $e): ?>
+                                <option value="<?php echo esc_attr($eid); ?>" <?php selected($seo_env, $eid); ?>><?php echo esc_html(!empty($e['name']) ? $e['name'] : 'محیط'); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <label style="font-weight: bold; display: block; margin-bottom: 4px;">شناسه مدل تحلیلی سئو:</label>
+                        <input type="text" name="seo_model" id="seo_model_input" value="<?php echo esc_attr($seo_model); ?>" class="large-text" style="direction: ltr; font-weight: bold;" placeholder="مثلاً: claude-3-5-sonnet یا gpt-4o">
                     </div>
                 </div>
             </div>
@@ -1749,14 +1753,13 @@ function nexis_ai_render_settings_page() {
                                     </td>
                                 </tr>
                                 <tr>
-                                    <th scope="row">مدل پیش‌فرض این اندپوینت</th>
+                                    <th scope="row">مدل پیش‌‌فرض این اندپوینت</th>
                                     <td>
                                         <input type="text" name="envs[<?php echo esc_attr($env_id); ?>][default_model]" id="defmodel-<?php echo esc_attr($env_id); ?>" value="<?php echo esc_attr(!empty($env['default_model']) ? $env['default_model'] : ''); ?>" class="regular-text" style="direction: ltr;" placeholder="شناسه مدل">
                                     </td>
                                 </tr>
                             </table>
 
-                            <!-- توضیحات استاندارد و ستاره‌دار راهنمای اتصال -->
                             <div style="background: #f8fafc; border-right: 4px solid #0073aa; padding: 12px 16px; margin: 15px 0; border-radius: 4px; font-size: 12.5px; line-height: 1.8; color: #334155;">
                                 <strong>💡 راهنمای پیکربندی اندپوینت‌ها:</strong><br>
                                 * <strong>سرورهای محلی و آفلاین (Ollama):</strong> آدرس پیش‌فرض را <code>http://127.0.0.1:11434/v1</code> قرار دهید و نیازی به API Key نیست.<br>
@@ -1838,7 +1841,7 @@ function nexis_ai_render_settings_page() {
                 </div>
             </div>
 
-            <!-- شخصی‌سازی ظاهر ویجت -->
+            <!-- بازگردانی کامل انتخابگر ایموجی‌ها/آیکون‌های ویجت -->
             <div class="nexis-card">
                 <h3 style="margin-top: 0; color: #0073aa; border-bottom: 1px solid #eee; padding-bottom: 10px;">شخصی‌سازی ظاهر ویجت فرانت‌اند و چیدمان</h3>
                 <table class="form-table">
@@ -1849,7 +1852,6 @@ function nexis_ai_render_settings_page() {
                     <tr>
                         <th scope="row">موقعیت قرارگیری دکمه چت</th>
                         <td>
-                            <!-- اصلاح ترتیب: راست سپس چپ متناسب با RTL -->
                             <label style="margin-left: 30px;">
                                 <input type="radio" name="widget_position" value="bottom-right" <?php checked(!empty($settings['widget_position']) ? $settings['widget_position'] : 'bottom-right', 'bottom-right'); ?>> پایین - راست
                             </label>
@@ -1859,17 +1861,36 @@ function nexis_ai_render_settings_page() {
                         </td>
                     </tr>
                     <tr>
-                        <th scope="row">تصویر دکمه شناور و آواتار هدر</th>
+                        <th scope="row">۱. آیکون دکمه شناور گوشه صفحه (Launcher Button)</th>
                         <td>
-                            <div style="display:flex; gap:15px; flex-wrap:wrap;">
-                                <div>
-                                    <input type="url" id="widget_launcher_img" name="widget_launcher_img" value="<?php echo esc_attr(!empty($settings['widget_launcher_img']) ? $settings['widget_launcher_img'] : ''); ?>" class="regular-text" style="direction: ltr;" placeholder="آدرس آیکون شناور">
-                                    <button type="button" class="button nexis-upload-media-btn" data-target="#widget_launcher_img">🖼️ گالری تصویر شناور</button>
-                                </div>
-                                <div>
-                                    <input type="url" id="widget_avatar_img" name="widget_avatar_img" value="<?php echo esc_attr(!empty($settings['widget_avatar_img']) ? $settings['widget_avatar_img'] : ''); ?>" class="regular-text" style="direction: ltr;" placeholder="آدرس تصویر کارشناس هدر">
-                                    <button type="button" class="button nexis-upload-media-btn" data-target="#widget_avatar_img">🖼️ گالری عکس هدر</button>
-                                </div>
+                            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;">
+                                <?php foreach ($available_launchers as $icon): ?>
+                                    <label style="border: 1px solid #ddd; padding: 5px 10px; border-radius: 8px; cursor: pointer; background: #fafafa; font-size: 20px; display: inline-flex; align-items: center; gap: 5px;">
+                                        <input type="radio" name="widget_launcher_icon" value="<?php echo esc_attr($icon); ?>" <?php checked(!empty($settings['widget_launcher_icon']) ? $settings['widget_launcher_icon'] : '💬', $icon); ?>>
+                                        <?php echo esc_html($icon); ?>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <input type="url" id="widget_launcher_img" name="widget_launcher_img" value="<?php echo esc_attr(!empty($settings['widget_launcher_img']) ? $settings['widget_launcher_img'] : ''); ?>" class="regular-text" style="direction: ltr;" placeholder="یا آدرس تصویر اختصاصی دکمه شناور">
+                                <button type="button" class="button nexis-upload-media-btn" data-target="#widget_launcher_img">🖼️ انتخاب از گالری وردپرس</button>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">۲. آواتار کارشناس هدر چت (Header Avatar)</th>
+                        <td>
+                            <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px;">
+                                <?php foreach ($available_avatars as $icon): ?>
+                                    <label style="border: 1px solid #ddd; padding: 5px 10px; border-radius: 8px; cursor: pointer; background: #fafafa; font-size: 20px; display: inline-flex; align-items: center; gap: 5px;">
+                                        <input type="radio" name="widget_avatar_icon" value="<?php echo esc_attr($icon); ?>" <?php checked(!empty($settings['widget_avatar_icon']) ? $settings['widget_avatar_icon'] : '🤖', $icon); ?>>
+                                        <?php echo esc_html($icon); ?>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <input type="url" id="widget_avatar_img" name="widget_avatar_img" value="<?php echo esc_attr(!empty($settings['widget_avatar_img']) ? $settings['widget_avatar_img'] : ''); ?>" class="regular-text" style="direction: ltr;" placeholder="یا آدرس تصویر کارشناس هدر">
+                                <button type="button" class="button nexis-upload-media-btn" data-target="#widget_avatar_img">🖼️ انتخاب از گالری وردپرس</button>
                             </div>
                         </td>
                     </tr>
@@ -1914,16 +1935,15 @@ function nexis_ai_render_settings_page() {
                 </table>
             </div>
 
-            <!-- بخش پشتیبان‌گیری و بازیابی امنیتی (Secure Backup & Restore) -->
+            <!-- پشتیبان‌گیری و بازیابی امنیتی -->
             <div class="nexis-card" style="background: #fdfefe; border: 1px solid #cbd5e1;">
                 <h3 style="margin-top: 0; color: #166534; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">
                     💾 پشتیبان‌گیری و بازیابی تنظیمات (Backup & Restore)
                 </h3>
                 <p style="color: #64748b; font-size: 13px;">
-                    می‌توانید تمامی تنظیمات افزونه (اندپوینت‌ها، پرامپت‌ها، واژه‌نامه مترادف‌ها، درختچه صفحات و کانفیگ‌های چت) را در قالب یک فایل استاندارد JSON دانلود کرده و روی محیط‌های دیگر بازیابی کنید.
+                    می‌توانید تمامی تنظیمات افزونه (اندپوینت‌ها، پرامپت‌ها، واژه‌‌نامه مترادف‌ها، درختچه صفحات و کانفیگ‌های چت) را در قالب یک فایل استاندارد JSON دانلود کرده و روی محیط‌های دیگر بازیابی کنید.
                 </p>
 
-                <!-- پیام امنیتی شفاف برای ادمین -->
                 <div style="background: #fffbeb; border-right: 4px solid #f59e0b; padding: 10px 14px; margin: 12px 0 16px 0; border-radius: 4px; font-size: 12.5px; color: #92400e;">
                     🔒 <strong>نکته امنیتی مهم:</strong> جهت حفظ امنیت و حریم خصوصی، <strong>کلید لایسنس و توکن‌های اتصال API در فایل پشتیبان ذخیره نمی‌شوند</strong>. هنگام بازیابی روی هر سایت، کلیدهای دسترسی و لایسنس فعال همان سایت به صورت خودکار حفظ خواهند شد و پاک نمی‌شوند.
                 </div>
@@ -1958,7 +1978,7 @@ function nexis_ai_render_settings_page() {
     function selectThisModel(envId, modelId) {
         jQuery('#default_model_input').val(modelId);
         jQuery('#defmodel-' + envId).val(modelId);
-        alert('مدل «' + modelId + '» به عنوان مدل فعال انتخاب شد.');
+        alert('مدل «' + modelId + '» به عنوان مدل فعال چت انتخاب شد.');
     }
 
     jQuery(document).ready(function($) {
@@ -2034,7 +2054,7 @@ function nexis_ai_render_settings_page() {
                     nonce: '<?php echo wp_create_nonce("nexis_ai_admin_nonce"); ?>'
                 },
                 success: function(res) {
-                    btn.prop('disabled', false).text('🔄 بررسی بروزرسانی از گیت‌‌هاب');
+                    btn.prop('disabled', false).text('🔄 بررسی بروزرسانی از گیت‌هاب');
                     if (res.success && res.data) {
                         if (res.data.status === 'update_available') {
                             status.html('<span style="color:#4ade80;font-weight:bold;">' + res.data.message + ' <a href="' + res.data.release_url + '" target="_blank" style="color:#fff;text-decoration:underline;">دانلود</a></span>');
@@ -2044,7 +2064,7 @@ function nexis_ai_render_settings_page() {
                     }
                 },
                 error: function() {
-                    btn.prop('disabled', false).text('🔄 بررسی بروزرسانی از گیت‌‌هاب');
+                    btn.prop('disabled', false).text('🔄 بررسی بروزرسانی از گیت‌هاب');
                     status.html('<span style="color:#f87171;">خطا در ارتباط با گیت‌هاب.</span>');
                 }
             });
@@ -2055,9 +2075,7 @@ function nexis_ai_render_settings_page() {
             var val = $(this).val().trim() || 'اندپوینت';
             $('.nexis-tab-item[data-id="' + eid + '"] .tab-label-text').text(val);
             $('#active_env_select option[value="' + eid + '"]').text(val);
-            if ($('#active_env_select').val() === eid) {
-                $('#active-env-title').text(val);
-            }
+            $('#seo_env_select option[value="' + eid + '"]').text(val);
         });
 
         $(document).on('click', '.nexis-tab-item', function() {
@@ -2066,18 +2084,6 @@ function nexis_ai_render_settings_page() {
             $(this).addClass('active');
             $('.nexis-tab-pane').removeClass('active');
             $('#pane-' + envId).addClass('active');
-        });
-
-        $('#active_env_select').on('change', function() {
-            var eid = $(this).val();
-            var name = $(this).find('option:selected').text();
-            $('#active-env-title').text(name);
-            $('.nexis-tab-item[data-id="' + eid + '"]').click();
-        });
-
-        $('#btn-quick-test').on('click', function() {
-            var activeId = $('#active_env_select').val();
-            $('.btn-test-single-env[data-id="' + activeId + '"]').click();
         });
 
         $(document).on('click', '.btn-test-single-env', function() {
@@ -2169,9 +2175,9 @@ function nexis_ai_render_settings_page() {
 
             $('#nexis-panes-container').append(paneHtml);
             $('#active_env_select').append($('<option>', { value: id, text: name }));
+            $('#seo_env_select').append($('<option>', { value: id, text: name }));
             globalEnvs[id] = { name: name, cached_models: [] };
             tabHtml.click();
-            $('#active_env_select').val(id).change();
         });
 
         $(document).on('click', '.btn-del-env', function() {
@@ -2180,9 +2186,9 @@ function nexis_ai_render_settings_page() {
             $('.nexis-tab-item[data-id="' + envId + '"]').remove();
             $('#pane-' + envId).remove();
             $('#active_env_select option[value="' + envId + '"]').remove();
+            $('#seo_env_select option[value="' + envId + '"]').remove();
             delete globalEnvs[envId];
             $('.nexis-tab-item').first().click();
-            $('#active_env_select').change();
         });
 
         $(document).on('click', '.btn-fetch-env-models', function(e) {
@@ -2319,20 +2325,49 @@ function nexis_ai_render_synonyms_page() {
     <?php
 }
 
-// صفحه لاگ‌های فنی API و خطاهای شبکه
+// صفحه لاگ‌های فنی API و خطاهای شبکه با فیلتر و صفحه‌بندی کامل
 function nexis_ai_render_api_logs_page() {
     global $wpdb;
     $table = $wpdb->prefix . 'nexis_ai_api_logs';
 
-    $paged = isset($_GET['paged']) ? max(1, intval($_GET['paged'])) : 1;
-    $per_page = 25;
-    $offset = ($paged - 1) * $per_page;
+    $filter_status = isset($_GET['filter_status']) ? sanitize_text_field($_GET['filter_status']) : '';
+    $filter_module = isset($_GET['filter_module']) ? sanitize_text_field($_GET['filter_module']) : '';
+    $search_model  = isset($_GET['search_model']) ? sanitize_text_field($_GET['search_model']) : '';
 
-    $total = $wpdb->get_var("SELECT COUNT(*) FROM $table");
-    $total_pages = ceil($total / $per_page);
-    $logs = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table ORDER BY id DESC LIMIT %d OFFSET %d", $per_page, $offset), ARRAY_A);
+    $where = ['1=1'];
+    $params = [];
+
+    if ($filter_status === 'errors') {
+        $where[] = "(http_code >= 400 OR http_code = 0)";
+    } elseif ($filter_status === 'success') {
+        $where[] = "(http_code >= 200 AND http_code < 300)";
+    }
+
+    if (!empty($filter_module)) {
+        $where[] = "module_type = %s";
+        $params[] = $filter_module;
+    }
+
+    if (!empty($search_model)) {
+        $where[] = "model_used LIKE %s";
+        $params[] = '%' . $wpdb->esc_like($search_model) . '%';
+    }
+
+    $where_sql = implode(' AND ', $where);
+
+    $count_sql = "SELECT COUNT(*) FROM $table WHERE $where_sql";
+    $total_items = !empty($params) ? $wpdb->get_var($wpdb->prepare($count_sql, $params)) : $wpdb->get_var($count_sql);
+
+    $per_page = 20;
+    $paged = isset($_GET['paged']) ? max(1, intval($_GET['paged'])) : 1;
+    $offset = ($paged - 1) * $per_page;
+    $total_pages = ceil($total_items / $per_page);
+
+    $data_sql = "SELECT * FROM $table WHERE $where_sql ORDER BY id DESC LIMIT %d OFFSET %d";
+    $query_params = array_merge($params, [$per_page, $offset]);
+    $logs = $wpdb->get_results($wpdb->prepare($data_sql, $query_params), ARRAY_A);
     ?>
-    <div class="wrap" style="direction: rtl; text-align: right; max-width: 1100px;">
+    <div class="wrap" style="direction: rtl; text-align: right; max-width: 1200px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
             <h1 style="margin: 0;">لاگ‌های فنی ارتباطات و خطاهای شبکه API</h1>
             <form method="post" action="">
@@ -2341,21 +2376,58 @@ function nexis_ai_render_api_logs_page() {
             </form>
         </div>
 
+        <!-- نوار فیلترهای پیشرفته لاگ‌های فنی -->
+        <form method="get" action="" style="background:#fff; border:1px solid #ccd0d4; border-radius:8px; padding:14px 18px; margin-bottom:20px; display:flex; gap:15px; align-items:center; flex-wrap:wrap;">
+            <input type="hidden" name="page" value="nexis-ai-api-logs">
+            
+            <div>
+                <label>وضعیت پاسخ:</label>
+                <select name="filter_status">
+                    <option value="">همه وضعیت‌ها</option>
+                    <option value="errors" <?php selected($filter_status, 'errors'); ?>>فقط خطاها و قطعی‌ها (۴xx, ۵xx)</option>
+                    <option value="success" <?php selected($filter_status, 'success'); ?>>فقط موفقیت‌آمیز (۲۰۰)</option>
+                </select>
+            </div>
+
+            <div>
+                <label>ماژول:</label>
+                <select name="filter_module">
+                    <option value="">همه ماژول‌ها</option>
+                    <option value="chat" <?php selected($filter_module, 'chat'); ?>>چت‌بات (Chat)</option>
+                    <option value="seo" <?php selected($filter_module, 'seo'); ?>>سئو و متادیتا (SEO)</option>
+                    <option value="test" <?php selected($filter_module, 'test'); ?>>تست اتصال (Test)</option>
+                </select>
+            </div>
+
+            <div>
+                <label>جستجوی مدل:</label>
+                <input type="text" name="search_model" value="<?php echo esc_attr($search_model); ?>" placeholder="نام مدل..." style="direction: ltr;">
+            </div>
+
+            <input type="submit" class="button button-secondary" value="اعمال فیلتر">
+            <?php if (!empty($filter_status) || !empty($filter_module) || !empty($search_model)): ?>
+                <a href="<?php echo admin_url('admin.php?page=nexis-ai-api-logs'); ?>" class="button button-link-delete" style="color: #dc2626;">حذف فیلترها</a>
+            <?php endif; ?>
+
+            <span style="margin-right:auto; color:#64748b;">تعداد لاگ‌های منطبق: <strong><?php echo intval($total_items); ?></strong> مورد</span>
+        </form>
+
         <table class="wp-list-table widefat fixed striped" style="border-radius: 8px; overflow: hidden;">
             <thead>
                 <tr>
                     <th style="width: 60px;">ردیف</th>
                     <th style="width: 25%;">اندپوینت سرور</th>
-                    <th style="width: 15%;">مدل فراخوانی‌شده</th>
-                    <th style="width: 12%;">وضعیت HTTP</th>
-                    <th style="width: 10%;">زمان (ثانیه)</th>
-                    <th style="width: 23%;">متن خطای سرور</th>
+                    <th style="width: 14%;">مدل</th>
+                    <th style="width: 10%;">ماژول</th>
+                    <th style="width: 11%;">وضعیت HTTP</th>
+                    <th style="width: 9%;">زمان (ثانیه)</th>
+                    <th style="width: 20%;">متن خطای سرور</th>
                     <th style="width: 15%;">زمان فراخوانی</th>
                 </tr>
             </thead>
             <tbody>
                 <?php if (empty($logs)): ?>
-                    <tr><td colspan="7" style="text-align: center; padding: 25px;">هیچ لاگی ثبت نشده است.</td></tr>
+                    <tr><td colspan="8" style="text-align: center; padding: 25px;">هیچ لاگی با فیلترهای انتخابی یافت نشد.</td></tr>
                 <?php else: ?>
                     <?php foreach ($logs as $l): 
                         $status_color = ($l['http_code'] >= 200 && $l['http_code'] < 300) ? '#166534' : '#dc2626';
@@ -2364,6 +2436,7 @@ function nexis_ai_render_api_logs_page() {
                             <td><?php echo esc_html($l['id']); ?></td>
                             <td><code style="direction: ltr; display: inline-block; font-size: 11.5px;"><?php echo esc_html($l['endpoint_url']); ?></code></td>
                             <td><code><?php echo esc_html($l['model_used']); ?></code></td>
+                            <td><span style="background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 11px;"><?php echo esc_html($l['module_type'] ?: 'chat'); ?></span></td>
                             <td><strong style="color: <?php echo $status_color; ?>;"><?php echo esc_html($l['http_code'] ?: 'Network Error'); ?></strong></td>
                             <td><?php echo esc_html($l['response_time']); ?>s</td>
                             <td><span style="color: #c5221f; font-size: 12px;"><?php echo esc_html($l['error_message'] ?: 'موفقیت‌آمیز'); ?></span></td>
@@ -2496,7 +2569,7 @@ function nexis_ai_render_tree_page() {
     <?php
 }
 
-// صفحه سئو معنایی GEO
+// صفحه سئو معنایی GEO همراه با شماره صفحات (Pagination) کامل
 function nexis_ai_render_geo_page() {
     $settings = get_option('nexis_ai_settings', []);
 
@@ -2578,7 +2651,7 @@ function nexis_ai_render_geo_page() {
                 <input type="text" name="geo_custom_indicators" value="<?php echo esc_attr($custom_ind); ?>" placeholder="شاخص‌ها با کاما جدا شوند (حداکثر ۴ مورد)" class="regular-text">
             </div>
             <input type="submit" name="nexis_save_geo_settings" class="button button-secondary" value="اعمال شاخص‌ها">
-            <span style="color:#64748b; margin-right:auto;">تعداد محصولات: <strong><?php echo $total_products; ?></strong> مورد</span>
+            <span style="color:#64748b; margin-right:auto;">تعداد کل محصولات در حال ممیزی: <strong><?php echo $total_products; ?></strong> مورد</span>
         </form>
 
         <table class="wp-list-table widefat fixed striped" style="border-radius: 8px; overflow: hidden;">
@@ -2658,6 +2731,27 @@ function nexis_ai_render_geo_page() {
             </tbody>
         </table>
 
+        <!-- نوار صفحه‌بندی شماره‌دار بازگردانی‌شده -->
+        <?php if ($total_pages > 1): ?>
+            <div class="tablenav" style="margin-top: 15px; display: flex; justify-content: space-between; align-items: center;">
+                <span class="displaying-num">نمایش صفحه <?php echo $paged; ?> از <?php echo $total_pages; ?> (مجموع: <?php echo $total_products; ?> محصول)</span>
+                <div class="tablenav-pages">
+                    <span class="pagination-links">
+                        <?php
+                        echo paginate_links([
+                            'base'      => add_query_arg('paged', '%#%'),
+                            'format'    => '',
+                            'prev_text' => '&laquo; قبلی',
+                            'next_text' => 'بعدی &raquo;',
+                            'total'     => $total_pages,
+                            'current'   => $paged
+                        ]);
+                        ?>
+                    </span>
+                </div>
+            </div>
+        <?php endif; ?>
+
         <!-- مودال سئو -->
         <div id="nexis-seo-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.65); z-index: 999999; justify-content: center; align-items: center;">
             <div style="background: #fff; width: 700px; max-width: 90vw; max-height: 85vh; border-radius: 12px; overflow-y: auto; padding: 25px; position: relative;">
@@ -2686,7 +2780,7 @@ function nexis_ai_render_geo_page() {
                         <label style="font-weight: bold; display: block; margin-bottom: 5px;">کد اسکیما ساختاریافته (FAQPage JSON-LD):</label>
                         <textarea id="nexis-out-schema" rows="5" class="large-text" readonly style="direction: ltr; font-family: monospace; font-size: 11.5px; background: #1e293b; color: #38bdf8; padding: 10px;"></textarea>
                     </div>
-                    <button type="button" id="nexis-copy-schema-btn" class="button button-secondary" style="font-weight: bold;">📋 کپی کل اسکیما در کلیپ‌بورد</button>
+                    <button type="button" id="nexis-copy-schema-btn" class="button button-secondary" style="font-weight: bold;">📋 کپی کل اسکیما در کلیپ‌‌بورد</button>
                 </div>
             </div>
         </div>
@@ -2797,7 +2891,7 @@ function nexis_ai_render_license_page() {
                         <th style="width: 140px;"><label for="nexis_license_input">کلید لایسنس:</label></th>
                         <td>
                             <div style="position: relative; max-width: 600px;">
-                                <input type="password" id="nexis_license_input" name="license_key" value="<?php echo esc_attr($current_key); ?>" class="large-text" style="direction: ltr; font-family: monospace; padding-left: 35px;" placeholder="کلید فعال‌سازی نکسیس...">
+                                <input type="password" id="nexis_license_input" name="license_key" value="<?php echo esc_attr($current_key); ?>" class="large-text" style="direction: ltr; font-family: monospace; padding-left: 35px;" placeholder="کلید فعال‌‌سازی نکسیس...">
                                 <span id="toggle_license_view" title="نمایش/مخفی کردن کلید" style="position: absolute; left: 10px; top: 8px; cursor: pointer; font-size: 16px; user-select: none;">👁️</span>
                             </div>
                         </td>
