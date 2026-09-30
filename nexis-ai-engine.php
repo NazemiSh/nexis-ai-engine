@@ -2,8 +2,8 @@
 /**
  * Plugin Name: Nexis AI Engine
  * Plugin URI: https://github.com/NazemiSh/nexis-ai-engine
- * Description: پلتفرم جامع و سازمانی هوش مصنوعی وردپرس با موتور RAG هیبریدی، خزش عمیق فوتر و المنتور، جستجوی چندرسانه‌ای با تصویر (Vision RAG)، تفکیک سرورها و مدل‌ها، مدیریت تایپوگرافی و لاگ‌های شبکه
- * Version: 1.0.10
+ * Description: پلتفرم سازمانی هوش مصنوعی وردپرس با موتور RAG هیبریدی، خزش عمیق فوتر و المنتور، سرچ تصویری (Vision RAG)، تفکیک سرورها و مدل‌ها با فیلتر زنده، تنظیم فواصل Offset و بکاپ امنیتی
+ * Version: 1.0.11
  * Author: Nexis AI Core
  * Author URI: https://github.com/NazemiSh
  * Text Domain: nexis-ai-engine
@@ -11,7 +11,7 @@
 
 if (!defined('ABSPATH')) exit;
 
-define('NEXIS_AI_VERSION', '1.0.10');
+define('NEXIS_AI_VERSION', '1.0.11');
 define('NEXIS_AI_GITHUB_REPO', 'NazemiSh/nexis-ai-engine');
 define('NEXIS_AI_SECRET_SALT', 'NEXIS_CORE_SECURE_SALT_99812_xK9#');
 define('NEXIS_AI_GITHUB_TOKEN', '');
@@ -121,7 +121,7 @@ function nexis_ai_format_persian_datetime($datetime_str) {
     return sprintf('%04d/%02d/%02d %s', $jy, $jm, $jd, $time_part);
 }
 
-// آپدیت گیت‌هاب
+// آپدیت خودکار از مخزن گیت‌هاب
 function nexis_ai_check_github_update() {
     $url = 'https://api.github.com/repos/' . NEXIS_AI_GITHUB_REPO . '/releases/latest';
     $headers = [
@@ -517,12 +517,11 @@ add_action('before_delete_post', function ($post_id) {
     $wpdb->delete($wpdb->prefix . 'nexis_ai_knowledge', ['post_id' => $post_id], ['%d']);
 });
 
-// پایپ‌لاین خزش اختصاصی محتوای فوتر (Footer Crawling)
+// خزش اختصاصی محتوای فوتر
 function nexis_ai_crawl_footer_content() {
     global $wpdb;
     $footer_texts = [];
 
-    // ۱. استخراج متون از پوسته فوتر المنتور (Elementor Header & Footer Builder)
     $footer_templates = get_posts([
         'post_type'      => ['elementor-hf', 'elementor_library'],
         'posts_per_page' => 10,
@@ -556,7 +555,6 @@ function nexis_ai_crawl_footer_content() {
         }
     }
 
-    // ۲. استخراج متون ابزارک‌های فعال فوتر وردپرس
     $sidebars = wp_get_sidebars_widgets();
     foreach ($sidebars as $sidebar_id => $widget_ids) {
         if (strpos($sidebar_id, 'footer') !== false || strpos($sidebar_id, 'فوتر') !== false) {
@@ -584,7 +582,7 @@ function nexis_ai_crawl_footer_content() {
         $wpdb->replace(
             $table_name,
             [
-                'post_id'    => 99999999, // شناسه سیستمیک منحصر‌به‌فرد برای فوتر
+                'post_id'    => 99999999,
                 'post_type'  => 'page',
                 'title'      => 'اطلاعات تماس، آدرس‌ها، دسترسی سریع و فوتر سایت',
                 'url'        => home_url('#footer'),
@@ -628,14 +626,13 @@ function nexis_ai_crawl_all_content() {
         wp_reset_postdata();
     }
 
-    // خزش و ایندکس فوتر
     nexis_ai_crawl_footer_content();
     $count++;
 
     return $count;
 }
 
-// نگاشت مترادف‌های سفارشی ادمین با پشتیبانی از دو جهت فلش
+// واژه‌نامه مترادف‌ها با پشتیبانی دوجهته فلش
 function nexis_ai_get_synonyms_map() {
     $settings = get_option('nexis_ai_settings', []);
     $raw = !empty($settings['custom_synonyms_text']) ? $settings['custom_synonyms_text'] : '';
@@ -647,7 +644,6 @@ function nexis_ai_get_synonyms_map() {
         $line = trim($line);
         if (empty($line)) continue;
 
-        // اصلاح و پشتیبانی خودکار از <= یا =>
         if (strpos($line, '=>') !== false) {
             list($key, $vals) = explode('=>', $line, 2);
         } elseif (strpos($line, '<=') !== false) {
@@ -755,7 +751,7 @@ function nexis_ai_search_knowledge_base($user_query, $limit = 5) {
     return $results;
 }
 
-// تولید هوشمند واژه‌نامه مترادف‌ها با فیلتر زبان و ساختار
+// ساخت هوشمند مترادف‌ها با فیلتر زبان فارسی
 add_action('wp_ajax_nexis_ai_generate_synonyms', function() {
     check_ajax_referer('nexis_ai_admin_nonce', 'nonce');
     if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'دسترسی غیرمجاز']);
@@ -763,7 +759,6 @@ add_action('wp_ajax_nexis_ai_generate_synonyms', function() {
     $titles = [];
     $pages = get_pages(['number' => 30, 'post_status' => 'publish']);
     foreach ($pages as $p) {
-        // فیلتر فقط عناوینی که کاراکترهای فارسی دارند
         if (preg_match('/[\x{0600}-\x{06FF}]/u', $p->post_title)) {
             $titles[] = trim($p->post_title);
         }
@@ -781,12 +776,12 @@ add_action('wp_ajax_nexis_ai_generate_synonyms', function() {
     }
 
     $context_str = implode(' ، ', array_unique($titles));
-    $prompt = "تو یک متخصص جستجو و سئو فارسی هستی.\nعناوین و دسته‌بندی‌های فارسی این وب‌سایت:\n[ $context_str ]\n\n"
+    $prompt = "تو یک متخصص جستجو و سئو فارسی هستی.\nعناوین و دسته‌‌بندی‌های فارسی این وب‌سایت:\n[ $context_str ]\n\n"
         . "دستورالعمل مهم:\n"
         . "۱. فقط برای عناوین فارسی بالا، کلمات جستجوی محاوره‌ای و مترادف‌های کاربردی بساز.\n"
         . "۲. سمت چپ رابطه الزاماً باید کلمه یا اصطلاح جستجوی احتمالی به زبان فارسی باشد.\n"
         . "۳. جهت فلش الزاماً و فقط به شکل => باشد.\n"
-        . "۴. هرگز کلمات انگلیسی یا اصطلاحات گرافیکی قالب را ننویس.\n"
+        . "۴. هرگز کلمات انگلیسی یا اصطلاحات قالبی را ننویس.\n"
         . "فرمت دقیق خروجی در هر سطر:\n"
         . "کلمه کلیدی فارسی => مترادف۱, مترادف۲, مترادف۳";
 
@@ -796,7 +791,6 @@ add_action('wp_ajax_nexis_ai_generate_synonyms', function() {
         wp_send_json_error(['message' => 'عدم دریافت پاسخ از مدل: ' . $response]);
     }
 
-    // پالایش و اصلاح خودکار فلش‌ها در صورت خطای احتمالی مدل
     $cleaned_lines = [];
     $lines = explode("\n", $response);
     foreach ($lines as $l) {
@@ -934,7 +928,7 @@ add_action('wp_ajax_nexis_ai_fetch_models', function() {
     wp_send_json_success(['models' => $models, 'count' => count($models)]);
 });
 
-// تست اتصال سرور
+// تست اتصال
 add_action('wp_ajax_nexis_ai_test_endpoint', function() {
     check_ajax_referer('nexis_ai_admin_nonce', 'nonce');
     if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'دسترسی غیرمجاز']);
@@ -1142,7 +1136,6 @@ function nexis_ai_ajax_chat_handler() {
     $settings = get_option('nexis_ai_settings', []);
     $vision_enabled = !empty($settings['enable_image_upload']) && $settings['enable_image_upload'] === '1';
 
-    // اعتبارسنجی دو لایه امنیتی فایل پیوست
     $visual_keywords = '';
     if (!empty($_FILES['image_file']['tmp_name'])) {
         if (!$vision_enabled) {
@@ -1163,7 +1156,6 @@ function nexis_ai_ajax_chat_handler() {
             wp_send_json_error(['reply' => 'فرمت تصویر نامعتبر است. تنها فرمت‌های JPG, PNG و WEBP مجاز هستند.']);
         }
 
-        // تبدیل تصویر به Data URI و تحلیل با Vision Model
         $img_data = file_get_contents($file['tmp_name']);
         $base64_img = 'data:' . $file['type'] . ';base64,' . base64_encode($img_data);
         $visual_keywords = nexis_ai_analyze_image_via_llm($base64_img);
@@ -1484,13 +1476,11 @@ add_action('wp_footer', function () {
             <div id="nexis-chat-messages" style="flex: 1; padding: 14px; overflow-y: auto; background: <?php echo $theme_chat; ?>; color: <?php echo $theme_text; ?>; font-size: 13.5px; line-height: 1.65;">
             </div>
 
-            <!-- نوار کانتکست ریپلای -->
             <div id="nexis-reply-bar" style="display:none; padding: 6px 12px; background: #e2e8f0; font-size: 11.5px; color: #334155; border-top: 1px solid #cbd5e1; justify-content: space-between; align-items: center;">
                 <span id="nexis-reply-text" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 85%;"></span>
                 <span id="nexis-cancel-reply" style="cursor:pointer; font-weight:bold; font-size:14px; color:#dc2626;">✕</span>
             </div>
 
-            <!-- پیش‌نمایش تصویر پیوست‌شده -->
             <div id="nexis-img-preview-bar" style="display:none; padding: 6px 12px; background: #f1f5f9; border-top: 1px solid #cbd5e1; align-items: center; gap: 10px;">
                 <img id="nexis-preview-thumb" src="" alt="Thumbnail" style="width: 38px; height: 38px; object-fit: cover; border-radius: 4px; border: 1px solid #cbd5e1;">
                 <span id="nexis-preview-name" style="font-size: 11.5px; color: #475569; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"></span>
@@ -1507,7 +1497,6 @@ add_action('wp_footer', function () {
 
             <div style="padding: 10px 12px; background: <?php echo $theme_bg; ?>; border-top: 1px solid rgba(0,0,0,0.07); display: flex; gap: 8px; align-items: center;">
                 <?php if ($vision_enabled): ?>
-                    <!-- لایه اول امنیتی: فیلتر اتریبیوت accept در مرورگر -->
                     <input type="file" id="nexis-file-input" accept="image/jpeg,image/png,image/webp,image/jpg" style="display:none;">
                     <button type="button" id="nexis-btn-attach" title="ارسال تصویر محصول" style="background: none; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 9px; cursor: pointer; font-size: 15px; color: #475569;">📎</button>
                 <?php endif; ?>
@@ -1566,7 +1555,6 @@ add_action('wp_footer', function () {
             fileInput.onchange = function() {
                 if (this.files && this.files[0]) {
                     var f = this.files[0];
-                    // بررسی فرانت‌اند پسوند و حجم
                     var validMimes = ['image/jpeg', 'image/png', 'image/webp'];
                     if (validMimes.indexOf(f.type) === -1) {
                         alert('تنها فایل‌های تصویری با پسوند JPG, PNG و WEBP مجاز هستند.');
@@ -1802,7 +1790,7 @@ add_action('admin_enqueue_scripts', function($hook) {
     }
 });
 
-// صفحه تنظیمات عمومی، محیط‌ها و بکاپ
+// صفحه تنظیمات عمومی، سرورها و مدل‌ها
 function nexis_ai_render_settings_page() {
     global $wpdb;
     $table_name = $wpdb->prefix . 'nexis_ai_knowledge';
@@ -1863,13 +1851,11 @@ function nexis_ai_render_settings_page() {
         $settings['seo_env']              = sanitize_key($_POST['seo_env']);
         $settings['seo_model']            = sanitize_text_field($_POST['seo_model']);
 
-        // ماژول Vision
         $settings['enable_image_upload']  = isset($_POST['enable_image_upload']) ? '1' : '0';
         $settings['vision_env']           = sanitize_key($_POST['vision_env']);
         $settings['vision_model']         = sanitize_text_field($_POST['vision_model']);
         $settings['image_max_size']       = intval($_POST['image_max_size']);
 
-        // تایپوگرافی و فونت
         $settings['widget_font_type']        = sanitize_text_field($_POST['widget_font_type']);
         $settings['widget_custom_font_name'] = sanitize_text_field($_POST['widget_custom_font_name']);
         $settings['widget_custom_font_url']  = esc_url_raw($_POST['widget_custom_font_url']);
@@ -1919,6 +1905,9 @@ function nexis_ai_render_settings_page() {
     $font_type           = !empty($settings['widget_font_type']) ? $settings['widget_font_type'] : 'inherit';
     $custom_font_name    = !empty($settings['widget_custom_font_name']) ? $settings['widget_custom_font_name'] : '';
     $custom_font_url     = !empty($settings['widget_custom_font_url']) ? $settings['widget_custom_font_url'] : '';
+
+    $offset_x            = isset($settings['widget_offset_x']) ? intval($settings['widget_offset_x']) : 25;
+    $offset_y            = isset($settings['widget_offset_y']) ? intval($settings['widget_offset_y']) : 25;
 
     $request_timeout     = !empty($settings['request_timeout']) ? intval($settings['request_timeout']) : 180;
     $relevance_threshold = isset($settings['relevance_threshold']) ? intval($settings['relevance_threshold']) : 3;
@@ -1996,7 +1985,7 @@ function nexis_ai_render_settings_page() {
         <form method="post" action="" id="nexis-settings-form">
             <?php wp_nonce_field('nexis_ai_nonce'); ?>
 
-            <!-- پنل تفکیک کامل سرورها و مدل‌ها -->
+            <!-- پنل تفکیک کامل سرورها و مدل‌ها همراه با فیلتر زنده و دراپ‌داون -->
             <div class="active-endpoint-card">
                 <h3 style="margin-top: 0; color: #1e40af; border-bottom: 1px solid #bfdbfe; padding-bottom: 10px;">
                     🔀 تفکیک مستقل سرورها و مدل‌های اختصاصی سامانه
@@ -2010,13 +1999,17 @@ function nexis_ai_render_settings_page() {
                             <span style="background: #e0f2fe; color: #0369a1; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: bold;">فرانت‌اند</span>
                         </div>
                         <label style="font-weight: bold; display: block; margin-bottom: 4px;">سرور/اندپوینت:</label>
-                        <select name="active_env" id="active_env_select" style="width: 100%; padding: 7px; margin-bottom: 10px;">
+                        <select name="active_env" id="active_env_select" class="module-env-sync" data-target="chat" style="width: 100%; padding: 7px; margin-bottom: 10px;">
                             <?php foreach ($envs as $eid => $e): ?>
                                 <option value="<?php echo esc_attr($eid); ?>" <?php selected($active_env, $eid); ?>><?php echo esc_html(!empty($e['name']) ? $e['name'] : 'محیط'); ?></option>
                             <?php endforeach; ?>
                         </select>
-                        <label style="font-weight: bold; display: block; margin-bottom: 4px;">شناسه مدل چت:</label>
-                        <input type="text" name="default_model" id="default_model_input" value="<?php echo esc_attr($default_model); ?>" class="large-text" style="direction: ltr; font-weight: bold;" placeholder="مثلاً: gpt-4o-mini">
+                        <label style="font-weight: bold; display: block; margin-bottom: 4px;">انتخاب مدل فعال چت:</label>
+                        <input type="text" class="module-filter-input" data-target="chat" placeholder="🔍 ...فیلتر و جستجو در لیست مدل‌ها" style="width: 100%; padding: 5px 8px; font-size: 12px; margin-bottom: 6px;">
+                        <select id="chat_model_select" class="module-model-select" data-target="chat" style="width: 100%; padding: 7px; margin-bottom: 6px; font-weight: bold; direction: ltr;">
+                            <option value="">-- انتخاب از مدل‌های کش‌شده --</option>
+                        </select>
+                        <input type="text" name="default_model" id="default_model_input" value="<?php echo esc_attr($default_model); ?>" class="large-text" style="direction: ltr; font-weight: bold;" placeholder="شناسه مدل چت">
                     </div>
 
                     <!-- ماژول سئو -->
@@ -2026,13 +2019,17 @@ function nexis_ai_render_settings_page() {
                             <span style="background: #dcfce7; color: #166534; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: bold;">تحلیل محتوا</span>
                         </div>
                         <label style="font-weight: bold; display: block; margin-bottom: 4px;">سرور/اندپوینت:</label>
-                        <select name="seo_env" id="seo_env_select" style="width: 100%; padding: 7px; margin-bottom: 10px;">
+                        <select name="seo_env" id="seo_env_select" class="module-env-sync" data-target="seo" style="width: 100%; padding: 7px; margin-bottom: 10px;">
                             <?php foreach ($envs as $eid => $e): ?>
                                 <option value="<?php echo esc_attr($eid); ?>" <?php selected($seo_env, $eid); ?>><?php echo esc_html(!empty($e['name']) ? $e['name'] : 'محیط'); ?></option>
                             <?php endforeach; ?>
                         </select>
-                        <label style="font-weight: bold; display: block; margin-bottom: 4px;">شناسه مدل سئو:</label>
-                        <input type="text" name="seo_model" id="seo_model_input" value="<?php echo esc_attr($seo_model); ?>" class="large-text" style="direction: ltr; font-weight: bold;" placeholder="مثلاً: gpt-4o یا sonnet">
+                        <label style="font-weight: bold; display: block; margin-bottom: 4px;">انتخاب مدل فعال سئو:</label>
+                        <input type="text" class="module-filter-input" data-target="seo" placeholder="🔍 ...فیلتر و جستجو در لیست مدل‌ها" style="width: 100%; padding: 5px 8px; font-size: 12px; margin-bottom: 6px;">
+                        <select id="seo_model_select" class="module-model-select" data-target="seo" style="width: 100%; padding: 7px; margin-bottom: 6px; font-weight: bold; direction: ltr;">
+                            <option value="">-- انتخاب از مدل‌های کش‌شده --</option>
+                        </select>
+                        <input type="text" name="seo_model" id="seo_model_input" value="<?php echo esc_attr($seo_model); ?>" class="large-text" style="direction: ltr; font-weight: bold;" placeholder="شناسه مدل سئو">
                     </div>
 
                     <!-- ماژول بینایی ماشین (Vision) -->
@@ -2042,13 +2039,17 @@ function nexis_ai_render_settings_page() {
                             <span style="background: #ede9fe; color: #6d28d9; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: bold;">مالتی‌مدال</span>
                         </div>
                         <label style="font-weight: bold; display: block; margin-bottom: 4px;">سرور/اندپوینت بینایی:</label>
-                        <select name="vision_env" id="vision_env_select" style="width: 100%; padding: 7px; margin-bottom: 10px;">
+                        <select name="vision_env" id="vision_env_select" class="module-env-sync" data-target="vision" style="width: 100%; padding: 7px; margin-bottom: 10px;">
                             <?php foreach ($envs as $eid => $e): ?>
                                 <option value="<?php echo esc_attr($eid); ?>" <?php selected($vision_env, $eid); ?>><?php echo esc_html(!empty($e['name']) ? $e['name'] : 'محیط'); ?></option>
                             <?php endforeach; ?>
                         </select>
-                        <label style="font-weight: bold; display: block; margin-bottom: 4px;">شناسه مدل Vision:</label>
-                        <input type="text" name="vision_model" id="vision_model_input" value="<?php echo esc_attr($vision_model); ?>" class="large-text" style="direction: ltr; font-weight: bold;" placeholder="مثلاً: gpt-4o-mini">
+                        <label style="font-weight: bold; display: block; margin-bottom: 4px;">انتخاب مدل بینایی ماشین:</label>
+                        <input type="text" class="module-filter-input" data-target="vision" placeholder="🔍 ...فیلتر و جستجو در لیست مدل‌ها" style="width: 100%; padding: 5px 8px; font-size: 12px; margin-bottom: 6px;">
+                        <select id="vision_model_select" class="module-model-select" data-target="vision" style="width: 100%; padding: 7px; margin-bottom: 6px; font-weight: bold; direction: ltr;">
+                            <option value="">-- انتخاب از مدل‌های کش‌شده --</option>
+                        </select>
+                        <input type="text" name="vision_model" id="vision_model_input" value="<?php echo esc_attr($vision_model); ?>" class="large-text" style="direction: ltr; font-weight: bold;" placeholder="شناسه مدل Vision">
                     </div>
                 </div>
             </div>
@@ -2218,7 +2219,7 @@ function nexis_ai_render_settings_page() {
                         <th scope="row">انتخاب قلم و فونت</th>
                         <td>
                             <select name="widget_font_type" id="widget_font_type_select" style="min-width: 240px;">
-                                <option value="inherit" <?php selected($font_type, 'inherit'); ?>>ارث‌‌بری از فونت اصلی قالب سایت (Inherit)</option>
+                                <option value="inherit" <?php selected($font_type, 'inherit'); ?>>ارث‌بری از فونت اصلی قالب سایت (Inherit)</option>
                                 <option value="vazirmatn" <?php selected($font_type, 'vazirmatn'); ?>>وزیرمتن (Vazirmatn)</option>
                                 <option value="iranyekan" <?php selected($font_type, 'iranyekan'); ?>>ایران‌یکان (IRANYekan)</option>
                                 <option value="yekanbakh" <?php selected($font_type, 'yekanbakh'); ?>>یکان‌بخ (Yekan Bakh)</option>
@@ -2240,12 +2241,12 @@ function nexis_ai_render_settings_page() {
                 </table>
             </div>
 
-            <!-- شخصی‌سازی ظاهر ویجت با آیکون‌ها و چیدمان کامل -->
+            <!-- شخصی‌سازی ظاهر ویجت با فواصل شناور (Offset) کامل -->
             <div class="nexis-card">
                 <h3 style="margin-top: 0; color: #0073aa; border-bottom: 1px solid #eee; padding-bottom: 10px;">شخصی‌سازی ظاهر ویجت فرانت‌اند و چیدمان</h3>
                 <table class="form-table">
                     <tr>
-                        <th scope="row"><label for="bot_name">عنوان چت‌بات</label></th>
+                        <th scope="row"><label for="bot_name">عنوان چت‌‌بات</label></th>
                         <td><input type="text" id="bot_name" name="bot_name" value="<?php echo esc_attr(!empty($settings['bot_name']) ? $settings['bot_name'] : 'دستیار هوشمند نکسیس'); ?>" class="regular-text"></td>
                     </tr>
                     <tr>
@@ -2257,6 +2258,22 @@ function nexis_ai_render_settings_page() {
                             <label>
                                 <input type="radio" name="widget_position" value="bottom-left" <?php checked(!empty($settings['widget_position']) ? $settings['widget_position'] : '', 'bottom-left'); ?>> پایین - چپ
                             </label>
+                        </td>
+                    </tr>
+                    <!-- ردیف بازگردانده شده تنظیم فاصله (Offset) -->
+                    <tr>
+                        <th scope="row">تنظیم فاصله (Offset)</th>
+                        <td>
+                            <div style="display:flex; gap:20px; align-items:center;">
+                                <div>
+                                    <label for="widget_offset_x">فاصله افقی (X):</label>
+                                    <input type="number" id="widget_offset_x" name="widget_offset_x" value="<?php echo intval($offset_x); ?>" style="width: 75px;"> px
+                                </div>
+                                <div>
+                                    <label for="widget_offset_y">فاصله عمودی (Y):</label>
+                                    <input type="number" id="widget_offset_y" name="widget_offset_y" value="<?php echo intval($offset_y); ?>" style="width: 75px;"> px
+                                </div>
+                            </div>
                         </td>
                     </tr>
                     <tr>
@@ -2337,10 +2354,10 @@ function nexis_ai_render_settings_page() {
             <!-- پشتیبان‌گیری و بازیابی امنیتی -->
             <div class="nexis-card" style="background: #fdfefe; border: 1px solid #cbd5e1;">
                 <h3 style="margin-top: 0; color: #166534; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">
-                    💾 پشتیبان‌گیری و بازیابی تنظیمات (Backup & Restore)
+                    💾 پشتیبان‌‌گیری و بازیابی تنظیمات (Backup & Restore)
                 </h3>
                 <p style="color: #64748b; font-size: 13px;">
-                    می‌توانید تمامی تنظیمات افزونه (اندپوینت‌ها، پرامپت‌ها، واژه‌‌نامه مترادف‌ها، درختچه صفحات و کانفیگ‌های چت) را در قالب یک فایل استاندارد JSON دانلود کرده و روی محیط‌های دیگر بازیابی کنید.
+                    می‌توانید تمامی تنظیمات افزونه (اندپوینت‌ها، پرامپت‌ها، واژه‌نامه مترادف‌ها، درختچه صفحات و کانفیگ‌های چت) را در قالب یک فایل استاندارد JSON دانلود کرده و روی محیط‌های دیگر بازیابی کنید.
                 </p>
 
                 <div style="background: #fffbeb; border-right: 4px solid #f59e0b; padding: 10px 14px; margin: 12px 0 16px 0; border-radius: 4px; font-size: 12.5px; color: #92400e;">
@@ -2374,13 +2391,65 @@ function nexis_ai_render_settings_page() {
     <script>
     var globalEnvs = <?php echo json_encode($envs); ?>;
 
+    function populateModuleSelect(target, envId, selectedVal) {
+        var sel = jQuery('#' + target + '_model_select');
+        sel.empty().append(jQuery('<option>', { value: '', text: '-- انتخاب از مدل‌های کش‌شده --' }));
+        if (globalEnvs[envId] && globalEnvs[envId].cached_models && globalEnvs[envId].cached_models.length) {
+            jQuery.each(globalEnvs[envId].cached_models, function(i, m) {
+                var opt = jQuery('<option>', { value: m.id, text: m.name + ' (' + m.id + ')' });
+                if (m.id === selectedVal) opt.prop('selected', true);
+                sel.append(opt);
+            });
+        }
+    }
+
     function selectThisModel(envId, modelId) {
         jQuery('#default_model_input').val(modelId);
         jQuery('#defmodel-' + envId).val(modelId);
+        jQuery('#chat_model_select').val(modelId);
         alert('مدل «' + modelId + '» به عنوان مدل فعال انتخاب شد.');
     }
 
     jQuery(document).ready(function($) {
+        // پر کردن دراپ‌داون‌های سه ماژول در آغاز
+        populateModuleSelect('chat', $('#active_env_select').val(), $('#default_model_input').val());
+        populateModuleSelect('seo', $('#seo_env_select').val(), $('#seo_model_input').val());
+        populateModuleSelect('vision', $('#vision_env_select').val(), $('#vision_model_input').val());
+
+        // تغییر اندپوینت ماژول
+        $('.module-env-sync').on('change', function() {
+            var target = $(this).data('target');
+            var envId = $(this).val();
+            var inputTarget = (target === 'chat') ? $('#default_model_input') : ((target === 'seo') ? $('#seo_model_input') : $('#vision_model_input'));
+            populateModuleSelect(target, envId, inputTarget.val());
+        });
+
+        // انتخاب مدل از سلکتور و تزریق به اینپوت
+        $('.module-model-select').on('change', function() {
+            var target = $(this).data('target');
+            var val = $(this).val();
+            if (val) {
+                if (target === 'chat') $('#default_model_input').val(val);
+                else if (target === 'seo') $('#seo_model_input').val(val);
+                else if (target === 'vision') $('#vision_model_input').val(val);
+            }
+        });
+
+        // فیلتر زنده و آنی در لیست دراپ‌داون مدل‌ها
+        $('.module-filter-input').on('keyup', function() {
+            var target = $(this).data('target');
+            var term = $(this).val().toLowerCase();
+            var sel = $('#' + target + '_model_select');
+            sel.find('option').each(function() {
+                var txt = $(this).text().toLowerCase();
+                if ($(this).val() === '' || txt.indexOf(term) !== -1) {
+                    $(this).show();
+                } else {
+                    $(this).hide();
+                }
+            });
+        });
+
         $('#widget_font_type_select').on('change', function() {
             if ($(this).val() === 'custom') $('#custom_font_row').show();
             else $('#custom_font_row').hide();
@@ -2458,7 +2527,7 @@ function nexis_ai_render_settings_page() {
                     nonce: '<?php echo wp_create_nonce("nexis_ai_admin_nonce"); ?>'
                 },
                 success: function(res) {
-                    btn.prop('disabled', false).text('🔄 بررسی بروزرسانی از گیت‌هاب');
+                    btn.prop('disabled', false).text('🔄 بررسی بروزرسانی از گیت‌‌هاب');
                     if (res.success && res.data) {
                         if (res.data.status === 'update_available') {
                             status.html('<span style="color:#4ade80;font-weight:bold;">' + res.data.message + ' <a href="' + res.data.release_url + '" target="_blank" style="color:#fff;text-decoration:underline;">دانلود</a></span>');
@@ -2630,10 +2699,15 @@ function nexis_ai_render_settings_page() {
                     if (res.success && res.data.models) {
                         statusSpan.html('<span style="color:green;">✔ تعداد ' + res.data.count + ' مدل کش شد.</span>');
                         tbody.empty();
+                        globalEnvs[envId].cached_models = res.data.models;
                         $.each(res.data.models, function(i, m) {
                             tbody.append('<tr style="cursor:pointer;" onclick="selectThisModel(\'' + envId + '\', \'' + m.id + '\')"><td><span style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:11px;">' + m.type + '</span></td><td><strong>' + m.name + '</strong></td><td><code>' + m.id + '</code></td></tr>');
                         });
                         tableBox.show();
+                        // بروزرسانی آنی دراپ‌داون‌های ماژول‌ها در صورت تطابق
+                        if ($('#active_env_select').val() === envId) populateModuleSelect('chat', envId, $('#default_model_input').val());
+                        if ($('#seo_env_select').val() === envId) populateModuleSelect('seo', envId, $('#seo_model_input').val());
+                        if ($('#vision_env_select').val() === envId) populateModuleSelect('vision', envId, $('#vision_model_input').val());
                     } else {
                         statusSpan.html('<span style="color:red;">' + (res.data ? res.data.message : 'خطا') + '</span>');
                     }
@@ -2649,7 +2723,7 @@ function nexis_ai_render_settings_page() {
     <?php
 }
 
-// صفحه واژه‌‌نامه مترادف‌ها با تولید هوشمند AI
+// صفحه واژه‌نامه مترادف‌ها با تولید هوشمند AI
 function nexis_ai_render_synonyms_page() {
     $settings = get_option('nexis_ai_settings', []);
 
@@ -3186,7 +3260,7 @@ function nexis_ai_render_geo_page() {
                         <label style="font-weight: bold; display: block; margin-bottom: 5px;">کد اسکیما ساختاریافته (FAQPage JSON-LD):</label>
                         <textarea id="nexis-out-schema" rows="5" class="large-text" readonly style="direction: ltr; font-family: monospace; font-size: 11.5px; background: #1e293b; color: #38bdf8; padding: 10px;"></textarea>
                     </div>
-                    <button type="button" id="nexis-copy-schema-btn" class="button button-secondary" style="font-weight: bold;">📋 کپی کل اسکیما در کلیپ‌‌بورد</button>
+                    <button type="button" id="nexis-copy-schema-btn" class="button button-secondary" style="font-weight: bold;">📋 کپی کل اسکیما در کلیپ‌بورد</button>
                 </div>
             </div>
         </div>
